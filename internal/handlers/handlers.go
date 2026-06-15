@@ -143,6 +143,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /login", s.auth.HandleLogin)
 	s.mux.HandleFunc("POST /logout", s.handleLogout)
 
+	// Serve embedded static assets (CSS, JS, images) under /static/.
+	// Without this, the browser would receive an HTML 404 for the
+	// stylesheet <link> in the layout, and strict-MIME-mode browsers
+	// (default since Chrome 100+) would refuse to apply it, leaving
+	// the page unstyled. http.FileServer sets .css to text/css and
+	// .js to application/javascript by extension mapping.
+	s.mux.Handle("/static/", http.StripPrefix("/static/",
+		http.FileServer(http.FS(web.Static()))))
+
 	authed := http.NewServeMux()
 	authed.HandleFunc("GET /sessions", s.handleSessions)
 	authed.HandleFunc("POST /sessions/{ns}/{name}/connect", s.handleConnect)
