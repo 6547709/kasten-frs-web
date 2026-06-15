@@ -8,6 +8,7 @@ set -euo pipefail
 LOG_FILE="${LOG_FILE:-/tmp/kfrs-test/deploy-test.log}"
 mkdir -p "$(dirname "$LOG_FILE")"
 : > "$LOG_FILE"
+chmod 600 "$LOG_FILE"
 
 _color() { printf '\033[%sm%s\033[0m' "$1" "$2"; }
 log()   { printf '%s %s\n' "$(_color 36 '>>>')" "$*"; }
@@ -155,12 +156,14 @@ step2_secrets() {
         --from-file=ssh-privatekey=./k10_frs \
         --dry-run=client -o yaml | oc apply -f - >>"$LOG_FILE" 2>&1
 
-    oc -n "$NS" get secret kasten-frs-web-helper-credentials \
-        -o jsonpath='{.data.HELPER_USERNAME}' | base64 -d >/dev/null \
-        || die "credentials secret missing HELPER_USERNAME"
-    oc -n "$NS" get secret kasten-frs-helper-private-key \
-        -o jsonpath='{.data.ssh-privatekey}' | base64 -d | head -1 \
-        | grep -q -- '-----BEGIN' \
+    local b64 pem
+    b64=$(oc -n "$NS" get secret kasten-frs-web-helper-credentials \
+        -o jsonpath='{.data.HELPER_USERNAME}')
+    [ -n "$b64" ] || die "credentials secret missing HELPER_USERNAME"
+    pem=$(oc -n "$NS" get secret kasten-frs-helper-private-key \
+        -o jsonpath='{.data.ssh-privatekey}')
+    [ -n "$pem" ] || die "private-key secret missing ssh-privatekey"
+    echo "$pem" | base64 -d | grep -qE -- '-----BEGIN .* PRIVATE KEY-----' \
         || die "private-key secret does not look like a PEM key"
     ok "secrets applied (idempotent)"
 }
