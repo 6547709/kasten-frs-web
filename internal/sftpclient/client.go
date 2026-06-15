@@ -126,8 +126,12 @@ func (c *Client) Dial(ctx context.Context, addr, hostKeySig string) (*Session, e
 	return &Session{sftp: sc, ssh: sshConn}, nil
 }
 
-// hostKeySigRe parses "[host:port] alg base64..." into host/port/key.
-var hostKeySigRe = regexp.MustCompile(`^\[([^\]]+)\]\s+(\S+)\s+(\S+)\s*$`)
+// hostKeySigRe parses "[host]:port alg base64..." (the format Kasten
+// uses for non-default ports like :2222) or "[host:port] alg base64..."
+// (the format ssh-keygen -l uses on output; appears in test fixtures).
+// Both forms are accepted because real FRS CRs emit the former and
+// unit tests hand-roll the latter.
+var hostKeySigRe = regexp.MustCompile(`^\[([^\]]+)\](?::(\d+))?\s+(\S+)\s+(\S+)\s*$`)
 
 // ParseHostKeySignature parses a Kasten-style host key signature.
 func ParseHostKeySignature(sig string) (ssh.PublicKey, error) {
@@ -139,12 +143,16 @@ func ParseHostKeySignature(sig string) (ssh.PublicKey, error) {
 		return nil, fmt.Errorf("malformed host key signature: %q", sig)
 	}
 	hostPort := m[1]
+	if m[2] != "" {
+		// "[host]:port" form: append port for net.SplitHostPort.
+		hostPort = hostPort + ":" + m[2]
+	}
 	_, portStr, splitErr := netSplitHostPort(hostPort)
 	if splitErr != nil {
 		return nil, fmt.Errorf("malformed host:port %q: %w", hostPort, splitErr)
 	}
 	_ = portStr
-	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(m[2] + " " + m[3]))
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(m[3] + " " + m[4]))
 	if err != nil {
 		return nil, fmt.Errorf("parse key: %w", err)
 	}

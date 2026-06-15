@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func TestParseHostKeySignature_BothForms(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+	hostKey := ts.HostKeyString()
+
+	// ssh-keygen-style: "[host:port] alg key" (port in the bracketed
+	// part, single space, alg, single space, key). Used in unit tests.
+	formA := "[" + ts.Addr().String() + "] " + hostKey
+	if _, err := ParseHostKeySignature(formA); err != nil {
+		t.Errorf("ssh-keygen form failed: %v", err)
+	}
+
+	// Kasten FRS-style: "[host]:port alg key" (port outside brackets).
+	// This is what FRS status.transports.sftp.hostKeySignature actually
+	// looks like in production. The colon-port variant must also parse.
+	host := strings.SplitN(ts.Addr().String(), ":", 2)[0]
+	formB := "[" + host + "]:2222 " + hostKey
+	if _, err := ParseHostKeySignature(formB); err != nil {
+		t.Errorf("Kasten form failed: %v (input: %q)", err, formB)
+	}
+
+	// Garbage should still fail.
+	if _, err := ParseHostKeySignature("not a host key sig"); err == nil {
+		t.Error("expected error for malformed input")
+	}
+	if _, err := ParseHostKeySignature(""); err == nil {
+		t.Error("expected error for empty input")
+	}
+}
+
 func TestClient_DialListRead(t *testing.T) {
 	ts, cleanup := StartSFTPTestServer(t)
 	defer cleanup()
