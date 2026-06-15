@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/pkg/sftp"
@@ -107,21 +108,30 @@ func StartSFTPTestServer(t *testing.T) (*TestServer, func()) {
 	return srv, cleanup
 }
 
-// fs is a minimal in-process SFTP filesystem rooted at ts.rootDir.
-// Only Filelist is implemented to satisfy the FileLister interface.
-// File ops beyond listing are not exercised by the smoke test.
+// fs is an SFTP filesystem rooted at ts.rootDir.
+// All paths are joined to the root; absolute paths (like "/hello.txt")
+// resolve to "<root>/hello.txt".
 type fs struct {
 	root string
+}
+
+func (f *fs) real(p string) string {
+	if p == "" || p == "/" {
+		return f.root
+	}
+	clean := filepath.Clean(p)
+	// Treat as relative to root regardless of leading slash.
+	clean = filepath.Join(".", clean)
+	return filepath.Join(f.root, clean)
 }
 
 func (f *fs) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 	switch r.Method {
 	case "List":
-		infos, err := os.ReadDir(filepath.Join(f.root, r.Filepath))
+		infos, err := os.ReadDir(f.real(r.Filepath))
 		if err != nil {
 			return nil, err
 		}
-		// Convert to []os.FileInfo via interface type
 		entries := make([]os.FileInfo, 0, len(infos))
 		for _, e := range infos {
 			info, err := e.Info()
@@ -130,23 +140,23 @@ func (f *fs) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 			}
 			entries = append(entries, info)
 		}
-		return listerAt(entries), nil
+		return &dirLister{entries: entries}, nil
 	case "Stat":
-		info, err := os.Stat(filepath.Join(f.root, r.Filepath))
+		info, err := os.Stat(f.real(r.Filepath))
 		if err != nil {
 			return nil, err
 		}
-		return listerAt([]os.FileInfo{info}), nil
+		return &dirLister{entries: []os.FileInfo{info}}, nil
 	}
 	return nil, fmt.Errorf("unsupported method %q", r.Method)
 }
 
 func (f *fs) Fileread(r *sftp.Request) (io.ReaderAt, error) {
-	return os.Open(filepath.Join(f.root, r.Filepath))
+	return os.Open(f.real(r.Filepath))
 }
 
 func (f *fs) Filewrite(r *sftp.Request) (io.WriterAt, error) {
-	fp := filepath.Join(f.root, r.Filepath)
+	fp := f.real(r.Filepath)
 	return os.OpenFile(fp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 }
 
@@ -154,18 +164,38 @@ func (f *fs) Filecmd(r *sftp.Request) error {
 	return nil
 }
 
-// listerAt is a minimal sftp.ListerAt over a fixed slice.
-type listerAt []os.FileInfo
+// dirLister is a stateful ListerAt. After the first ListAt call returns
+// all entries, the next call returns (0, io.EOF) so the SFTP server sends
+// a STATUS sshFxEOF response and the client exits its read loop.
+type dirLister struct {
+	mu      sync.Mutex
+	entries []os.FileInfo
+	closed  bool
+}
 
-func (l listerAt) ListAt(ls []os.FileInfo, offset int64) (int, error) {
-	if offset >= int64(len(l)) {
+func (l *dirLister) ListAt(ls []os.FileInfo, offset int64) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
 		return 0, io.EOF
 	}
-	n := copy(ls, l[offset:])
-	if n < len(ls) {
-		return n, io.EOF
+	// Always return everything on the first call.
+	if offset == 0 {
+		n := copy(ls, l.entries)
+		l.closed = true
+		if n < len(ls) {
+			return n, io.EOF
+		}
+		return n, nil
 	}
-	return n, nil
+	return 0, io.EOF
+}
+
+func (l *dirLister) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.closed = true
+	return nil
 }
 
 func (ts *TestServer) handle(nconn net.Conn, cfg *ssh.ServerConfig) {
@@ -197,7 +227,10 @@ func (ts *TestServer) handle(nconn net.Conn, cfg *ssh.ServerConfig) {
 							FileCmd:  &fs{root: ts.rootDir},
 							FileList: &fs{root: ts.rootDir},
 						})
-						_ = server.Serve()
+						if err := server.Serve(); err != nil && err != io.EOF {
+							_ = ch.Close()
+						}
+						_ = server.Close()
 					}
 				default:
 					_ = req.Reply(false, nil)
