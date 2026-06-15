@@ -4,3 +4,4 @@ coverage.out
 .idea/
 .vscode/
 web/static/htmx.min.js
+.kfrs-overlay-*/

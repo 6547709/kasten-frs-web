@@ -92,21 +92,28 @@ oc -n kasten-io create secret generic kasten-frs-helper-private-key \
 
 ### 4.3 overlay & apply
 
-`scripts/deploy-test.sh` 内联生成临时 overlay 目录（`mktemp -d`），内容：
+`scripts/deploy-test.sh` 计算 `DEPLOY_DIR=$(dirname "$BASH_SOURCE[0]")/../deploy`，
+然后在 `PROJECT_ROOT`（即 deploy 的父目录）下 `mktemp -d -p "$PROJECT_ROOT"
+-t .kfrs-overlay-XXXXXX` 创建 overlay；overlay 与 `deploy/` 同级，所以
+`resources: - ../deploy` 相对路径可解析。overlay 内容：
 
-```
-<overlay>/
-└── kustomization.yaml
-    namespace: kasten-io
-    resources:
-      - ../../deploy/
-    images:
-      - name: ghcr.io/liguoqiang/kasten-frs-web
-        newName: ghcr.io/6547709/kasten-frs-web
-        newTag: main
+```yaml
+<overlay>/kustomization.yaml
+namespace: kasten-io
+resources:
+  - ../deploy
+images:
+  - name: ghcr.io/liguoqiang/kasten-frs-web
+    newName: ghcr.io/6547709/kasten-frs-web
+    newTag: main
 ```
 
 `oc apply -k <overlay>/`。
+
+> 实现选择：overlay 必须在能解析到 `deploy/` 的位置；`/tmp/...`
+> + `../../deploy/` 不能跨设备解析，因此落在 `PROJECT_ROOT` 下用
+> `../deploy`。这样 `.kfrs-overlay-XXX` 是项目内的临时目录（.gitignore
+> 里要忽略；cleanup 在 Task 9 删）。
 
 ### 4.4 wait
 
