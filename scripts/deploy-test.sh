@@ -141,14 +141,39 @@ step1_preflight() {
     ok "preflight ok: image ${IMAGE_REPO}:${IMAGE_TAG} reachable, FRS active"
 }
 
+step2_secrets() {
+    STEP_NUM=2
+    step "secrets: credentials + ssh private key"
+    oc -n "$NS" create secret generic kasten-frs-web-helper-credentials \
+        --from-literal="HELPER_USERNAME=$HELPER_USERNAME" \
+        --from-literal="HELPER_PASSWORD=$HELPER_PASSWORD" \
+        --from-literal="HELPER_COOKIE_SECRET=$HELPER_COOKIE_SECRET" \
+        --dry-run=client -o yaml | oc apply -f - >>"$LOG_FILE" 2>&1
+
+    oc -n "$NS" create secret generic kasten-frs-helper-private-key \
+        --type=kubernetes.io/ssh-auth \
+        --from-file=ssh-privatekey=./k10_frs \
+        --dry-run=client -o yaml | oc apply -f - >>"$LOG_FILE" 2>&1
+
+    oc -n "$NS" get secret kasten-frs-web-helper-credentials \
+        -o jsonpath='{.data.HELPER_USERNAME}' | base64 -d >/dev/null \
+        || die "credentials secret missing HELPER_USERNAME"
+    oc -n "$NS" get secret kasten-frs-helper-private-key \
+        -o jsonpath='{.data.ssh-privatekey}' | base64 -d | head -1 \
+        | grep -q -- '-----BEGIN' \
+        || die "private-key secret does not look like a PEM key"
+    ok "secrets applied (idempotent)"
+}
+
 main() {
     parse_args "$@"
     step1_preflight
+    step2_secrets
     if [ "$SKIP_E2E" = "true" ]; then
         log "skip-e2e set; stopping after preflight"
         exit 0
     fi
-    log "(steps 2-8 not yet implemented; this is a checkpoint run)"
+    log "(steps 3-8 not yet implemented; this is a checkpoint run)"
     exit 0
 }
 
