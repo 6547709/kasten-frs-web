@@ -301,14 +301,23 @@ step4_wait_probe() {
 
 step5_netpol() {
     step_start 5 "netpol: DNS, K8s API, FRS:2222"
-    oc -n "$NS" exec "$POD" -- nslookup kubernetes.default >>"$LOG_FILE" 2>&1 \
+    # The helper image is built on ubi9-minimal and only installs
+    # ca-certificates; nslookup and curl are NOT in the runtime PATH.
+    # Use getent (glibc) for DNS resolution and bash's /dev/tcp for
+    # TCP connectivity. These are available in every Linux image.
+    local dns_ip
+    dns_ip=$(oc -n "$NS" exec "$POD" -- \
+        getent hosts kubernetes.default 2>>"$LOG_FILE" | awk '{print $1}') \
         || die "DNS lookup kubernetes.default failed"
+    [ -n "$dns_ip" ] || die "DNS returned no IP for kubernetes.default"
 
-    local api_code
-    api_code=$(oc -n "$NS" exec "$POD" -- \
-        curl -sS -k -o /dev/null -w '%{http_code}' \
-        https://kubernetes.default.svc/api)
-    [ "$api_code" = "200" ] || die "K8s API returned $api_code (expected 200)"
+    # K8s API reachability: TCP connect to the service IP, then a
+    # 3-second timeout. The helper already proved the API is reachable
+    # at startup (it loaded its private key from the API), so a simple
+    # TCP probe is sufficient to confirm NetworkPolicy egress works.
+    oc -n "$NS" exec "$POD" -- \
+        timeout 3 bash -c "</dev/tcp/${dns_ip}/443" >>"$LOG_FILE" 2>&1 \
+        || die "TCP connect to K8s API ${dns_ip}:443 failed"
 
     local frs_svc
     frs_svc=$(oc -n "$NS" get svc -l "k10.kasten.io/frs-name=$FRS_NAME" \
@@ -319,7 +328,7 @@ step5_netpol() {
         bash -c "timeout 3 bash -c '</dev/tcp/${frs_svc}.${NS}.svc.cluster.local/2222' && echo OK" \
         >>"$LOG_FILE" 2>&1 \
         || die "TCP connect to FRS :2222 failed (svc=$frs_svc)"
-    ok "netpol: DNS, API, FRS:2222 all reachable"
+    ok "netpol: DNS (${dns_ip}), API :443, FRS ${frs_svc}:2222 all reachable"
 }
 
 step6_e2e() {
