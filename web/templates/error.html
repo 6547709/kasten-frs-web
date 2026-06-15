@@ -1,7 +1,5 @@
-{{define "error_body"}}<main class="main">
-  <div class="error-box">
-    <h1>⚠ {{.Title}}</h1>
-    <p>{{.Message}}</p>
-    <a href="/sessions">返回会话列表</a>
-  </div>
-</main>{{end}}
+{{define "error_body"}}<div class="error-wrap"><div class="error-card">
+  <h1>⚠ {{.Title}}</h1>
+  <p>{{.Message}}</p>
+  <a href="/sessions">‹ 返回会话列表</a>
+</div></div>{{end}}

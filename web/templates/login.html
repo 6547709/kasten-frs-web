@@ -1,9 +1,11 @@
-{{define "login_body"}}<main class="login">
-  <form method="post" action="/login" class="card">
-    <h1>🔒 登录</h1>
-    <label>用户名<input name="username" required></label>
-    <label>密码<input name="password" type="password" required></label>
-    <button class="btn-primary" type="submit">登 录</button>
-    {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
-  </form>
-</main>{{end}}
+{{define "login_body"}}<form class="login-card" method="post" action="/login">
+  <div class="brand">Kasten <span class="accent">FRS</span> Web Helper</div>
+  <p class="sub">登录后浏览 FRS (文件恢复会话) 目录树。<br>支持 SFTP 协议 — 需先用 k10tools 创建 FRS 会话。</p>
+  <label for="username">用户名</label>
+  <input id="username" name="username" required autocomplete="username" autofocus>
+  <label for="password">密码</label>
+  <input id="password" name="password" type="password" required autocomplete="current-password">
+  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+  <button type="submit">登 录</button>
+  <p class="hint">需 kasten-frs-web-helper-credentials Secret 配置</p>
+</form>{{end}}

@@ -7,14 +7,75 @@
   <script src="/static/htmx.min.js"></script>
 </head>
 <body>
-  <header class="hdr">
-    <span class="hdr-logo">Kasten FRS Web Helper</span>
-    <span class="hdr-subtitle">企业级 FRS 文件浏览</span>
-    <span class="hdr-user"><a href="/logout">退出</a></span>
+{{if eq .BodyTemplate "login_body"}}
+  <div class="login-stage">
+    {{template "login_body" .}}
+  </div>
+{{else}}
+<div class="app">
+
+  <header class="ribbon">
+    <span class="brand">Kasten <span class="accent">FRS</span> Web Helper<span class="version">v0.2.0</span></span>
+    <nav class="nav">
+      <a class="nav-item active" href="/sessions">Home</a>
+      <a class="nav-item" href="/sessions">FRS Browser</a>
+    </nav>
+    <span class="spacer"></span>
+    <span class="status-pill"><span class="dot"></span>Connected</span>
+    <span class="user">{{.User}}<a href="/logout">退出</a></span>
   </header>
-  {{if eq .BodyTemplate "login_body"}}{{template "login_body" .}}{{end}}
-  {{if eq .BodyTemplate "sessions_body"}}{{template "sessions_body" .}}{{end}}
-  {{if eq .BodyTemplate "browse_body"}}{{template "browse_body" .}}{{end}}
-  {{if eq .BodyTemplate "error_body"}}{{template "error_body" .}}{{end}}
+
+  <aside class="sidebar">
+    <div class="section">
+      <div class="section-title">Quick Access</div>
+      <a class="item {{if eq .BodyTemplate "sessions_body"}}active{{end}}" href="/sessions">
+        <span class="ico">⊟</span><span class="lbl">FRS Sessions</span>
+      </a>
+    </div>
+    <div class="section">
+      <div class="section-title">Browse</div>
+      <a class="item" href="/sessions"><span class="ico">↻</span><span class="lbl">Refresh</span></a>
+      <a class="item" href="/logout"><span class="ico">⏻</span><span class="lbl">Sign Out</span></a>
+    </div>
+  </aside>
+
+  <main class="workarea">
+    {{if eq .BodyTemplate "sessions_body"}}
+      <div class="workarea-title">FRS Sessions</div>
+      <div class="workarea-subtitle">活跃的文件恢复会话 — 点击 进入 浏览目录树</div>
+    {{else if eq .BodyTemplate "browse_body"}}
+      <div class="workarea-title">{{.FRS.Namespace}} / {{.FRS.Name}}</div>
+      <div class="workarea-subtitle">FRS 路径 &nbsp;›&nbsp; {{.Path}}</div>
+    {{end}}
+
+    {{if eq .BodyTemplate "browse_body"}}
+    <div class="toolbar">
+      <nav class="crumb">
+        <a href="/sessions">FRS</a><span class="sep">›</span>
+        <a href="/browse?frs={{.FRS.Namespace}}/{{.FRS.Name}}&path=/">{{.FRS.Namespace}}/{{.FRS.Name}}</a>
+        {{if ne .Path "/"}}{{$segs := splitPath .Path}}{{range $i, $seg := $segs}}<span class="sep">›</span>{{if isLastPathSeg $i (len $segs)}}<span class="current">{{$seg}}</span>{{else}}<a href="/browse?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{buildPath $.Path $i}}">{{$seg}}</a>{{end}}{{end}}{{end}}
+      </nav>
+    </div>
+    {{end}}
+
+    <div class="content">
+      {{if eq .BodyTemplate "sessions_body"}}{{template "sessions_body" .}}{{end}}
+      {{if eq .BodyTemplate "browse_body"}}{{template "browse_body" .}}{{end}}
+      {{if eq .BodyTemplate "error_body"}}{{template "error_body" .}}{{end}}
+    </div>
+  </main>
+
+  <footer class="statusbar">
+    <span><span class="dot ok"></span>Authenticated</span>
+    {{if ne .BodyTemplate "sessions_body"}}
+    <span>FRS: <strong>{{.FRS.Namespace}}/{{.FRS.Name}}</strong></span>
+    <span>Path: <strong>{{.Path}}</strong></span>
+    {{if .Entries}}<span>Items: <strong>{{len .Entries}}</strong></span>{{end}}
+    {{end}}
+    <span class="right">Kasten FRS Web Helper · v0.2.0</span>
+  </footer>
+
+</div>
+{{end}}
 </body>
 </html>{{end}}

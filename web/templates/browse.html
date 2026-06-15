@@ -1,21 +1,51 @@
-{{define "browse_body"}}<main class="main">
-  <h1>会话: {{.FRS.Namespace}} / {{.FRS.Name}}</h1>
-  <p class="crumb">🏠 FRS › {{.FRS.Namespace}} › {{.FRS.Name}} › {{.Path}}</p>
-  <table class="data">
-    <thead><tr><th>类型</th><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
-    <tbody>
-    {{range .Entries}}
-      <tr>
-        <td>{{if .IsDir}}📁 {{else}}📄{{end}}</td>
-        <td>{{.Name}}</td>
-        <td>{{.Size}}</td>
-        <td>{{.ModTime.Format "2006-01-02 15:04"}}</td>
-        <td>
-          <a class="btn-secondary" href="?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{$.Path}}/{{.Name}}">进入</a>
-          <a class="btn-primary" href="/download?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{$.Path}}/{{.Name}}">下载</a>
-        </td>
-      </tr>
+{{define "browse_body"}}<table class="filelist">
+  <thead>
+    <tr>
+      <th style="width: 50%">Name</th>
+      <th style="width: 14%">Size</th>
+      <th style="width: 18%">Modified</th>
+      <th style="width: 18%; text-align:right">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{if eq (len .Entries) 0}}
+    <tr><td colspan="4" class="empty">这个目录为空</td></tr>
     {{end}}
-    </tbody>
-  </table>
-</main>{{end}}
+    {{if ne .Path "/"}}
+    <tr>
+      <td class="name">
+        <a href="?frs={{.FRS.Namespace}}/{{.FRS.Name}}&path={{parentPath .Path}}">
+          <span class="ico folder">📁</span>..
+        </a>
+      </td>
+      <td class="size">—</td>
+      <td class="modtime">—</td>
+      <td class="actions"><span style="color:#8A95A2">返回上级</span></td>
+    </tr>
+    {{end}}
+    {{range .Entries}}
+    <tr>
+      <td class="name">
+        {{if .IsDir}}
+        <a href="?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{joinPath $.Path .Name}}">
+          <span class="ico folder">📁</span>{{.Name}}
+        </a>
+        {{else}}
+        <a href="/download?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{joinPath $.Path .Name}}">
+          <span class="ico file">📄</span>{{.Name}}
+        </a>
+        {{end}}
+      </td>
+      <td class="size">{{.Size}} bytes</td>
+      <td class="modtime">{{.ModTime.Format "2006-01-02 15:04:05"}}</td>
+      <td class="actions">
+        {{if .IsDir}}
+          <a href="?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{joinPath $.Path .Name}}">Open</a>
+        {{else}}
+          <a href="/download?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{joinPath $.Path .Name}}">Download</a>
+        {{end}}
+      </td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>{{end}}

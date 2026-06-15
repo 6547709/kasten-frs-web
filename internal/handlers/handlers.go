@@ -20,13 +20,77 @@ import (
 
 // pageTemplates is loaded once from the embedded web/templates/*.html.
 // layout.html defines the layout template; sessions.html / browse.html
-// each define a `body` template that layout.html includes via
-// {{template "body" .}}. Earlier versions of this handler used inline
-// `sessionsTmpl` / `browseTmpl` string constants which omitted the
-// layout, the per-entry "进入" / "下载" links, and the styling. We
-// load the canonical templates here so the on-disk HTML in
-// web/templates/ is the single source of truth.
-var pageTemplates = template.Must(template.ParseFS(web.Templates(), "templates/*.html"))
+// each define a `*_body` template that layout.html includes via an
+// if-eq dispatch on .BodyTemplate. Earlier versions of this handler
+// used inline `sessionsTmpl` / `browseTmpl` string constants which
+// omitted the layout, the per-entry "进入" / "下载" links, and the
+// styling. We load the canonical templates here so the on-disk HTML
+// in web/templates/ is the single source of truth.
+var pageTemplates = template.Must(
+	template.New("").Funcs(template.FuncMap{
+		"splitPath":     splitPath,
+		"isLastPathSeg": isLastPathSeg,
+		"buildPath":     buildPath,
+		"parentPath":    parentPath,
+		"joinPath":      joinPath,
+		"lower":         strings.ToLower,
+	}).ParseFS(web.Templates(), "templates/*.html"))
+
+// splitPath turns an absolute path "/a/b/c" into a slice of
+// path-segments, ["a", "b", "c"]. An empty path or "/" yields nil.
+func splitPath(p string) []string {
+	p = strings.Trim(p, "/")
+	if p == "" {
+		return nil
+	}
+	return strings.Split(p, "/")
+}
+
+// isLastPathSeg reports whether the i-th segment is the last one.
+// Used by the crumb-rendering code to make the final segment a
+// non-clickable <span> instead of an <a>.
+func isLastPathSeg(i, total int) bool {
+	return i == total-1
+}
+
+// buildPath returns the absolute path through the i-th segment
+// (inclusive) of an absolute path. E.g. buildPath("/a/b/c", 1) = "/a".
+// Used to make each crumb in the path bar a link to the
+// corresponding parent.
+func buildPath(p string, upTo int) string {
+	segs := splitPath(p)
+	if upTo < 0 {
+		upTo = 0
+	}
+	if upTo > len(segs) {
+		upTo = len(segs)
+	}
+	return "/" + strings.Join(segs[:upTo], "/")
+}
+
+// parentPath returns the absolute parent path. "/" returns "/".
+func parentPath(p string) string {
+	if p == "/" || p == "" {
+		return "/"
+	}
+	p = strings.TrimRight(p, "/")
+	i := strings.LastIndex(p, "/")
+	if i <= 0 {
+		return "/"
+	}
+	return p[:i]
+}
+
+// joinPath joins a parent path and a leaf name with a single '/'.
+func joinPath(parent, leaf string) string {
+	if parent == "" || parent == "/" {
+		return "/" + leaf
+	}
+	if strings.HasSuffix(parent, "/") {
+		return parent + leaf
+	}
+	return parent + "/" + leaf
+}
 
 // FRSProvider abstracts the K8s FRS calls used by handlers.
 type FRSProvider interface {
@@ -93,7 +157,12 @@ func (s *Server) routes() {
 
 func (s *Server) handleLoginPage(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, loginPage)
+	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
+		"Title":        "登录",
+		"BodyTemplate": "login_body",
+	}); err != nil {
+		slog.Error("render login", "err", err)
+	}
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +184,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		"Title":         "活跃 FRS 会话",
 		"BodyTemplate":  "sessions_body",
 		"FRS":           frsList,
+		"User":          s.auth.Username,
 	}); err != nil {
 		slog.Error("render sessions", "err", err)
 	}
@@ -173,6 +243,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		"FRS":           ref,
 		"Path":          path,
 		"Entries":       entries,
+		"User":          s.auth.Username,
 	}); err != nil {
 		slog.Error("render browse", "err", err)
 	}
@@ -231,8 +302,4 @@ func baseName(p string) string {
 	}
 	return p[i+1:]
 }
-
-const loginPage = `<!doctype html><html><body><form method="post" action="/login">
-<input name="username"><input name="password" type="password">
-<button>Login</button></form></body></html>`
 
