@@ -73,6 +73,7 @@ POD=""
 ROUTE_HOST=""
 BASE=""
 COOKIE_JAR=""
+OVERLAY_DIR=""
 
 parse_args() {
     while [ $# -gt 0 ]; do
@@ -168,6 +169,36 @@ step2_secrets() {
     ok "secrets applied (idempotent)"
 }
 
+step3_overlay_apply() {
+    STEP_NUM=3
+    step "overlay: kustomize image override + apply"
+    local DEPLOY_DIR
+    DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/deploy"
+    [ -d "$DEPLOY_DIR" ] || die "deploy/ dir not found at $DEPLOY_DIR (script must be at scripts/deploy-test.sh)"
+    local PROJECT_ROOT
+    PROJECT_ROOT="$(dirname "$DEPLOY_DIR")"
+    OVERLAY_DIR=$(mktemp -d -p "$PROJECT_ROOT" -t .kfrs-overlay-XXXXXX)
+    cat > "$OVERLAY_DIR/kustomization.yaml" <<YAML
+namespace: $NS
+resources:
+  - ../deploy
+images:
+  - name: ghcr.io/liguoqiang/kasten-frs-web
+    newName: $IMAGE_REPO
+    newTag: $IMAGE_TAG
+YAML
+    oc apply -k "$OVERLAY_DIR/" >>"$LOG_FILE" 2>&1
+    oc -n "$NS" get deploy kasten-frs-web-helper \
+        -o jsonpath='{.spec.template.spec.containers[0].image}' >/dev/null \
+        || die "deployment kasten-frs-web-helper not created"
+    local actual
+    actual=$(oc -n "$NS" get deploy kasten-frs-web-helper \
+        -o jsonpath='{.spec.template.spec.containers[0].image}')
+    [ "$actual" = "${IMAGE_REPO}:${IMAGE_TAG}" ] \
+        || die "image override failed: got '$actual' expected '${IMAGE_REPO}:${IMAGE_TAG}'"
+    ok "applied overlay; image is $actual"
+}
+
 main() {
     parse_args "$@"
     step1_preflight
@@ -176,7 +207,8 @@ main() {
         log "skip-e2e set; stopping after preflight"
         exit 0
     fi
-    log "(steps 3-8 not yet implemented; this is a checkpoint run)"
+    step3_overlay_apply
+    log "(steps 4-8 not yet implemented; this is a checkpoint run)"
     exit 0
 }
 
