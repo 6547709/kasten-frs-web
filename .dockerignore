@@ -1,0 +1,8 @@
+.git/
+.github/
+docs/
+bin/
+coverage.out
+*.test
+.idea/
+.vscode/
