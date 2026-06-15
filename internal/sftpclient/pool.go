@@ -1,0 +1,94 @@
+package sftpclient
+
+import (
+	"sync"
+	"time"
+
+	"k8s.io/apimachinery/pkg/types"
+)
+
+// SessionKey identifies a pooled session.
+type SessionKey struct {
+	UserSessionID string
+	FRS           types.NamespacedName
+}
+
+// poolEntry wraps a stored Session with usage timestamps.
+type poolEntry struct {
+	sess        *Session
+	lastUsedAt  time.Time
+}
+
+// Pool stores SFTP sessions keyed by user+FRS, expiring idle entries.
+type Pool struct {
+	mu      sync.RWMutex
+	entries map[SessionKey]*poolEntry
+	ttl     time.Duration
+	client  *Client
+}
+
+// NewPool creates a Pool. TTL is the idle expiry window.
+func NewPool(client *Client, ttl time.Duration) *Pool {
+	return &Pool{
+		entries: make(map[SessionKey]*poolEntry),
+		ttl:     ttl,
+		client:  client,
+	}
+}
+
+// Store inserts a session under key.
+func (p *Pool) Store(key SessionKey, sess *Session) {
+	p.mu.Lock()
+	p.entries[key] = &poolEntry{sess: sess, lastUsedAt: time.Now()}
+	p.mu.Unlock()
+}
+
+// Get returns the session and bumps lastUsedAt.
+func (p *Pool) Get(key SessionKey) (*Session, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(e.lastUsedAt) > p.ttl {
+		delete(p.entries, key)
+		go e.sess.Close()
+		return nil, false
+	}
+	e.lastUsedAt = time.Now()
+	return e.sess, true
+}
+
+// Close removes a session and closes the underlying SFTP connection.
+func (p *Pool) Close(key SessionKey) {
+	p.mu.Lock()
+	e, ok := p.entries[key]
+	if ok {
+		delete(p.entries, key)
+	}
+	p.mu.Unlock()
+	if ok {
+		_ = e.sess.Close()
+	}
+}
+
+// Sweep removes all expired entries. Intended for a periodic timer.
+func (p *Pool) Sweep() {
+	p.mu.Lock()
+	var toClose []*Session
+	now := time.Now()
+	for k, e := range p.entries {
+		if now.Sub(e.lastUsedAt) > p.ttl {
+			delete(p.entries, k)
+			toClose = append(toClose, e.sess)
+		}
+	}
+	p.mu.Unlock()
+	for _, s := range toClose {
+		_ = s.Close()
+	}
+}
+
+// Client returns the underlying SFTP client used for new dials.
+func (p *Pool) Client() *Client { return p.client }

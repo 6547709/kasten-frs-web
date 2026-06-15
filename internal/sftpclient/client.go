@@ -59,8 +59,16 @@ type Session struct {
 
 // Close terminates the SFTP and underlying SSH connection.
 func (s *Session) Close() error {
-	_ = s.sftp.Close()
-	return s.ssh.Close()
+	if s == nil {
+		return nil
+	}
+	if s.sftp != nil {
+		_ = s.sftp.Close()
+	}
+	if s.ssh != nil {
+		return s.ssh.Close()
+	}
+	return nil
 }
 
 // ListDir lists entries at path.
