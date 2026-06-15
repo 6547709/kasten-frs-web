@@ -301,18 +301,66 @@ step5_netpol() {
     ok "netpol: DNS, API, FRS:2222 all reachable"
 }
 
+step6_e2e() {
+    STEP_NUM=6
+    step "e2e: Route, login, /sessions, connect, /browse"
+    ROUTE_HOST=$(oc -n "$NS" get route kasten-frs-web-helper \
+        -o jsonpath='{.spec.host}')
+    [ -n "$ROUTE_HOST" ] || die "Route kasten-frs-web-helper has no host"
+    BASE="https://${ROUTE_HOST}"
+    COOKIE_JAR=$(mktemp -t kfrs-cookies-XXXXXX)
+
+    log "BASE=$BASE"
+    local code
+    code=$(curl -sS -k -L -o /dev/null -w '%{http_code}' "$BASE/login")
+    [ "$code" = "200" ] || die "/login returned $code (expected 200)"
+
+    local login_code
+    login_code=$(curl -sS -k -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+        -o /dev/null -w '%{http_code}' \
+        --data-urlencode "username=$HELPER_USERNAME" \
+        --data-urlencode "password=$HELPER_PASSWORD" \
+        "$BASE/login")
+    [ "$login_code" = "303" ] || die "POST /login returned $login_code (expected 303)"
+    grep -q 'kfrs_sid' "$COOKIE_JAR" \
+        || die "no kfrs_sid cookie issued (see $COOKIE_JAR)"
+
+    local sessions_html
+    sessions_html=$(curl -sS -k -b "$COOKIE_JAR" "$BASE/sessions")
+    echo "$sessions_html" | grep -q "$FRS_NAME" \
+        || die "/sessions does not list $FRS_NAME"
+    echo "$sessions_html" | grep -qiE '<table' \
+        || die "/sessions HTML does not contain <table"
+
+    local connect_code
+    connect_code=$(curl -sS -k -L -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+        -o /dev/null -w '%{http_code}' -X POST \
+        "$BASE/sessions/${FRS_NAMESPACE}/${FRS_NAME}/connect")
+    [ "$connect_code" = "303" ] || die "POST /sessions/.../connect returned $connect_code (expected 303)"
+
+    local browse_html
+    browse_html=$(curl -sS -k -L -b "$COOKIE_JAR" \
+        "$BASE/browse?frs=${FRS_NAMESPACE}/${FRS_NAME}&path=/")
+    echo "$browse_html" | grep -qiE '<tr|<td' \
+        || die "/browse HTML does not look like a directory listing"
+    echo "$browse_html" | grep -q "$FRS_NAME" \
+        || die "/browse does not mention $FRS_NAME"
+    ok "e2e passed: login → sessions → connect → browse all 200/303"
+}
+
 main() {
     parse_args "$@"
     step1_preflight
     step2_secrets
     step3_overlay_apply
     step4_wait_probe
+    step5_netpol
+    step6_e2e
     if [ "$SKIP_E2E" = "true" ]; then
         log "skip-e2e set; stopping after preflight"
         exit 0
     fi
-    step5_netpol
-    log "(steps 6-8 not yet implemented; this is a checkpoint run)"
+    log "(steps 7-8 not yet implemented; this is a checkpoint run)"
     exit 0
 }
 
