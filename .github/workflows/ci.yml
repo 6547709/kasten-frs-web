@@ -16,6 +16,11 @@ permissions:
 
 jobs:
   test:
+    # Run tests on PRs and on tag pushes. Skip on plain main pushes so
+    # commits to main don't burn CI minutes — main is the merge
+    # target for already-reviewed PRs, and the canonical test signal
+    # is the tag-push run.
+    if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
