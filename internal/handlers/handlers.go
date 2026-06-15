@@ -176,7 +176,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	frsList, err := s.frs.ListActiveFRS(r.Context(), s.nsWhitelist)
 	if err != nil {
-		http.Error(w, "list FRS failed: "+err.Error(), http.StatusBadGateway)
+		s.renderError(w, http.StatusBadGateway, "FRS 列表拉取失败", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -196,19 +196,19 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	ref := k8s.FRSRef{Namespace: ns, Name: name}
 	view, err := s.frs.GetFRS(r.Context(), ref)
 	if err != nil {
-		http.Error(w, "get FRS: "+err.Error(), http.StatusBadGateway)
+		s.renderError(w, http.StatusBadGateway, "FRS 查询失败", err.Error())
 		return
 	}
 	if view.Port != int64(s.frsPort) {
-		http.Error(w, fmt.Sprintf("FRS port %d not allowed", view.Port),
-			http.StatusBadRequest)
+		s.renderError(w, http.StatusBadRequest, "FRS 端口不被允许",
+			fmt.Sprintf("FRS 报告端口 %d，但我们只允许 %d", view.Port, s.frsPort))
 		return
 	}
 
 	addr := fmt.Sprintf("%s.%s.svc.cluster.local:%d", view.ServiceName, view.ServiceNS, view.Port)
 	sess, err := s.pool.Client().Dial(r.Context(), addr, view.HostKeySig)
 	if err != nil {
-		http.Error(w, "SFTP connect: "+err.Error(), http.StatusBadGateway)
+		s.renderError(w, http.StatusBadGateway, "SFTP 连接失败", err.Error())
 		return
 	}
 	uid := userIDFromCookie(r, s.auth.CookieName)
@@ -220,7 +220,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	ref, path, err := parseFRSQuery(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.renderError(w, http.StatusBadRequest, "无效的 frs 查询", err.Error())
 		return
 	}
 	key := sftpclient.SessionKey{UserSessionID: userIDFromCookie(r, s.auth.CookieName),
@@ -233,7 +233,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := sess.ListDir(path)
 	if err != nil {
-		http.Error(w, "list: "+err.Error(), http.StatusNotFound)
+		s.renderError(w, http.StatusNotFound, "目录列表失败", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -252,19 +252,20 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	ref, path, err := parseFRSQuery(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.renderError(w, http.StatusBadRequest, "无效的 frs 查询", err.Error())
 		return
 	}
 	key := sftpclient.SessionKey{UserSessionID: userIDFromCookie(r, s.auth.CookieName),
 		FRS: types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}}
 	sess, ok := s.pool.Get(key)
 	if !ok {
-		http.Error(w, "session expired", http.StatusUnauthorized)
+		s.renderError(w, http.StatusUnauthorized, "SFTP 会话已过期",
+			"请返回 FRS Sessions 重新点击 进入")
 		return
 	}
 	rc, err := sess.Open(path)
 	if err != nil {
-		http.Error(w, "open: "+err.Error(), http.StatusNotFound)
+		s.renderError(w, http.StatusNotFound, "文件无法打开", err.Error())
 		return
 	}
 	defer rc.Close()
