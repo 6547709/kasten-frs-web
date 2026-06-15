@@ -1,0 +1,23 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - gosimple
+    - ineffassign
+    - unused
+    - gocritic
+    - gofmt
+    - goimports
+
+linters-settings:
+  gocritic:
+    enabled-tags: [diagnostic, performance, style]
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters: [errcheck, gosimple]

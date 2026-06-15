@@ -1,0 +1,6 @@
+bin/
+coverage.out
+*.test
+.idea/
+.vscode/
+web/static/htmx.min.js
