@@ -172,11 +172,24 @@ step2_secrets() {
 step3_overlay_apply() {
     STEP_NUM=3
     step "overlay: kustomize image override + apply"
+    # Resolve script's own location to an absolute path. BASH_SOURCE[0] is
+    # relative when the script is invoked as `bash scripts/deploy-test.sh`,
+    # so we must absolutize before the inner `cd`, otherwise the path
+    # resolution follows $PWD (which may be unrelated) and fails silently.
+    local src="${BASH_SOURCE[0]}"
+    [ "${src:0:1}" = "/" ] || src="$PWD/$src"
     local DEPLOY_DIR
-    DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/deploy"
+    DEPLOY_DIR="$(cd "$(dirname "$src")/.." && pwd)/deploy"
     [ -d "$DEPLOY_DIR" ] || die "deploy/ dir not found at $DEPLOY_DIR (script must be at scripts/deploy-test.sh)"
     local PROJECT_ROOT
     PROJECT_ROOT="$(dirname "$DEPLOY_DIR")"
+    # Read-only source trees (CI sandboxes, read-only bind mounts) cannot
+    # host the overlay. Reject explicitly rather than producing a cryptic
+    # mktemp error and (worse) a kustomize path that won't resolve.
+    if ! ( : >> "$PROJECT_ROOT/.write-test" ) 2>/dev/null; then
+        die "PROJECT_ROOT $PROJECT_ROOT is read-only; cannot create overlay"
+    fi
+    rm -f "$PROJECT_ROOT/.write-test"
     OVERLAY_DIR=$(mktemp -d -p "$PROJECT_ROOT" -t .kfrs-overlay-XXXXXX)
     cat > "$OVERLAY_DIR/kustomization.yaml" <<YAML
 namespace: $NS
@@ -188,12 +201,10 @@ images:
     newTag: $IMAGE_TAG
 YAML
     oc apply -k "$OVERLAY_DIR/" >>"$LOG_FILE" 2>&1
-    oc -n "$NS" get deploy kasten-frs-web-helper \
-        -o jsonpath='{.spec.template.spec.containers[0].image}' >/dev/null \
-        || die "deployment kasten-frs-web-helper not created"
     local actual
     actual=$(oc -n "$NS" get deploy kasten-frs-web-helper \
-        -o jsonpath='{.spec.template.spec.containers[0].image}')
+        -o jsonpath='{.spec.template.spec.containers[0].image}') \
+        || die "deployment kasten-frs-web-helper not created"
     [ "$actual" = "${IMAGE_REPO}:${IMAGE_TAG}" ] \
         || die "image override failed: got '$actual' expected '${IMAGE_REPO}:${IMAGE_TAG}'"
     ok "applied overlay; image is $actual"

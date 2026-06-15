@@ -110,10 +110,13 @@ images:
 
 `oc apply -k <overlay>/`。
 
-> 实现选择：overlay 必须在能解析到 `deploy/` 的位置；`/tmp/...`
-> + `../../deploy/` 不能跨设备解析，因此落在 `PROJECT_ROOT` 下用
-> `../deploy`。这样 `.kfrs-overlay-XXX` 是项目内的临时目录（.gitignore
-> 里要忽略；cleanup 在 Task 9 删）。
+> 实现选择：overlay 必须落在与 `deploy/` 同一目录树下，使 kustomize
+> 的 `../deploy` 相对路径可解析。`/tmp/kfrs-overlay-XXX` 跨设备解析在
+> 多数系统上工作但不可移植；放在 `$PROJECT_ROOT/.kfrs-overlay-XXX/`
+> 把相对路径固定为 `../deploy`，避免跨设备 / 符号链接限制。
+> `.kfrs-overlay-XXX` 已加入 `.gitignore`；Task 9 cleanup 会清理。
+> BASH_SOURCE[0] 必须先绝对化（直接调用 `bash scripts/deploy-test.sh`
+> 时是相对路径），并显式拒绝只读 PROJECT_ROOT（CI 沙箱常见）。
 
 ### 4.4 wait
 
