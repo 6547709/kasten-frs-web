@@ -1,0 +1,17 @@
+{{define "layout"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>{{.Title}} — Kasten FRS Web Helper</title>
+  <link rel="stylesheet" href="/static/veeam-theme.css">
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  <header class="hdr">
+    <span class="hdr-logo">Kasten FRS Web Helper</span>
+    <span class="hdr-subtitle">企业级 FRS 文件浏览</span>
+    <span class="hdr-user"><a href="/logout">退出</a></span>
+  </header>
+  {{template "body" .}}
+</body>
+</html>{{end}}

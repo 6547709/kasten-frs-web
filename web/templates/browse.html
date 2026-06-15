@@ -1,0 +1,21 @@
+{{define "body"}}<main class="main">
+  <h1>会话: {{.FRS.Namespace}} / {{.FRS.Name}}</h1>
+  <p class="crumb">🏠 FRS › {{.FRS.Namespace}} › {{.FRS.Name}} › {{.Path}}</p>
+  <table class="data">
+    <thead><tr><th>类型</th><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
+    <tbody>
+    {{range .Entries}}
+      <tr>
+        <td>{{if .IsDir}}📁 {{else}}📄{{end}}</td>
+        <td>{{.Name}}</td>
+        <td>{{.Size}}</td>
+        <td>{{.ModTime.Format "2006-01-02 15:04"}}</td>
+        <td>
+          <a class="btn-secondary" href="?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{$.Path}}/{{.Name}}">进入</a>
+          <a class="btn-primary" href="/download?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{$.Path}}/{{.Name}}">下载</a>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</main>{{end}}

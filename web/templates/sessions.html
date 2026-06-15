@@ -1,0 +1,23 @@
+{{define "body"}}<main class="main">
+  <h1>活跃 FRS 会话 <button class="btn-secondary" hx-get="/sessions" hx-target="main">⟳ 刷新</button></h1>
+  <table class="data">
+    <thead><tr><th>状态</th><th>名称</th><th>命名空间</th><th>过期时间</th><th>操作</th></tr></thead>
+    <tbody>
+    {{range .FRS}}
+      <tr>
+        <td><span class="badge badge-active">{{.State}}</span></td>
+        <td>{{.Ref.Name}}</td>
+        <td>{{.Ref.Namespace}}</td>
+        <td>{{.ExpiryTime.Format "2006-01-02 15:04"}}</td>
+        <td>
+          <form method="post" action="/sessions/{{.Ref.Namespace}}/{{.Ref.Name}}/connect">
+            <button class="btn-primary">浏览</button>
+          </form>
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="5" class="empty">暂无可用 FRS 会话</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</main>{{end}}
