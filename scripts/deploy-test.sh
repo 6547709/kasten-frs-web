@@ -348,6 +348,37 @@ step6_e2e() {
     ok "e2e passed: login → sessions → connect → browse all 200/303"
 }
 
+step7_summary() {
+    STEP_NUM=7
+    step "summary"
+    cat <<SUMMARY
+=== DEPLOY TEST SUMMARY ===
+image:    ${IMAGE_REPO}:${IMAGE_TAG}
+pod:      ${NS}/${POD}
+route:    ${BASE}
+frs:      ${FRS_NAMESPACE}/${FRS_NAME}
+log:      ${LOG_FILE}
+overall:  PASS
+SUMMARY
+}
+
+cleanup() {
+    log "cleanup: removing test resources from $NS"
+    oc -n "$NS" delete deploy,svc,route -l "$DEPLOY_LABEL" \
+        --ignore-not-found >>"$LOG_FILE" 2>&1 || true
+    oc -n "$NS" delete sa kasten-frs-web-helper \
+        --ignore-not-found >>"$LOG_FILE" 2>&1 || true
+    oc -n "$NS" delete rolebinding,role,clusterrolebinding,clusterrole \
+        -l "$DEPLOY_LABEL" --ignore-not-found >>"$LOG_FILE" 2>&1 || true
+    oc -n "$NS" delete networkpolicy -l "$DEPLOY_LABEL" \
+        --ignore-not-found >>"$LOG_FILE" 2>&1 || true
+    oc -n "$NS" delete secret kasten-frs-web-helper-credentials \
+        kasten-frs-helper-private-key --ignore-not-found >>"$LOG_FILE" 2>&1 || true
+    [ -n "$OVERLAY_DIR" ] && [ -d "$OVERLAY_DIR" ] && rm -rf "$OVERLAY_DIR"
+    [ -n "$COOKIE_JAR" ] && [ -f "$COOKIE_JAR" ] && rm -f "$COOKIE_JAR"
+    ok "cleanup done"
+}
+
 main() {
     parse_args "$@"
     step1_preflight
@@ -360,7 +391,8 @@ main() {
         log "skip-e2e set; stopping after preflight"
         exit 0
     fi
-    log "(steps 7-8 not yet implemented; this is a checkpoint run)"
+    step7_summary
+    [ "$CLEANUP" = "true" ] && cleanup
     exit 0
 }
 
