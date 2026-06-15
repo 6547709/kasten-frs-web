@@ -216,7 +216,7 @@ overall:      PASS
 - 顶层 trap `ERR`：打印 `=== FAIL at step N: <name> (line L) ===` + 最近 30 行 `deploy-test.log`，并 `oc describe pod "$POD" -n kasten-io`。
 - `curl` 命令统一用 `curl -fsSk`（fail、silent、insecure-skip-verify 跳过自签证书），失败时带 `-v` 重写到 `deploy-test.log`。
 - 每个 step 用 `STEP_NAME=...; log ">>> $STEP_NAME"` 标记，方便定位。
-- 最终退出码：成功 = 0；失败 = 对应 step 编号（1..8）。
+- 最终退出码：成功 = 0；失败 = 对应 step 编号（1..7，preflight/secrets/apply/wait-probe/netpol/e2e/summary）。
 
 ## 6. 输入参数 / 环境变量
 
