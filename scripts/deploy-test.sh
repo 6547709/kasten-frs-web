@@ -211,6 +211,7 @@ step3_overlay_apply() {
 namespace: $NS
 resources:
   - ../deploy
+  - frs-allow.yaml
 images:
   - name: ghcr.io/liguoqiang/kasten-frs-web
     newName: $IMAGE_REPO
@@ -273,6 +274,36 @@ patches:
             ports:
               - port: 8080
                 protocol: TCP
+YAML
+    # K10's datamover creates a per-FRS NetworkPolicy (named frs-XXXXX) that
+    # only allows ingress to the FRS pod on :2222 from the FRS CR's
+    # namespace (e.g. "default"). Our helper pod is in kasten-io, so K10's
+    # auto-generated policy blocks us from reaching the FRS SFTP endpoint.
+    # Add a small ingress allow rule that lets our pod connect to the FRS
+    # pod on 2222. K10's policy still applies (it allows default -> FRS);
+    # the rules are unioned, so this widens the source set.
+    cat > "$OVERLAY_DIR/frs-allow.yaml" <<YAML
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kasten-frs-web-helper-to-frs
+  namespace: $NS
+  labels:
+    app: kasten-frs-web-helper
+spec:
+  podSelector:
+    matchLabels:
+      k10.kasten.io/frs-name: $FRS_NAME
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: kasten-frs-web-helper
+    ports:
+    - port: 2222
+      protocol: TCP
 YAML
     oc apply -k "$OVERLAY_DIR/" >>"$LOG_FILE" 2>&1
     local actual
@@ -362,10 +393,22 @@ step6_e2e() {
         || die "/sessions HTML does not contain <table"
 
     local connect_code
-    connect_code=$(curl -sS -k -L -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    # Two-step: POST without -L (capture the 303 + Location); then
+    # follow the redirect with an explicit GET. Mixing -L with -X POST
+    # confuses curl into re-POSTing the redirect target, which 405s
+    # against GET-only routes like /browse.
+    connect_code=$(curl -sS -k -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
         -o /dev/null -w '%{http_code}' -X POST \
         "$BASE/sessions/${FRS_NAMESPACE}/${FRS_NAME}/connect")
     [ "$connect_code" = "303" ] || die "POST /sessions/.../connect returned $connect_code (expected 303)"
+
+    local browse_html browse_code
+    browse_html=$(curl -sS -k -b "$COOKIE_JAR" \
+        -o /tmp/.kfrs-browse.html -w '%{http_code}' \
+        "$BASE/browse?frs=${FRS_NAMESPACE}/${FRS_NAME}&path=/")
+    browse_code=$browse_html
+    browse_html=$(cat /tmp/.kfrs-browse.html)
+    [ "$browse_code" = "200" ] || die "/browse returned $browse_code (expected 200)"
 
     local browse_html
     browse_html=$(curl -sS -k -L -b "$COOKIE_JAR" \
