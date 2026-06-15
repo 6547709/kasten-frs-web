@@ -1,11 +1,9 @@
 # syntax=docker/dockerfile:1.7
 #
-# NOTE: The build stage below uses registry.access.redhat.com/ubi9/go-toolset:1.22-9.4.
-# go.mod declares `go 1.26.0`, so the build will fail until this tag is bumped to
-# a 1.26-series go-toolset (e.g. `.../go-toolset:1.26-9.4`) or to `:latest`. The
-# final build/sweep is in Task 23; if the chosen tag is unavailable, update this
-# line. We keep the spec value here so the diff matches the plan.
-FROM registry.access.redhat.com/ubi9/go-toolset:1.22-9.4 AS build
+# Build stage uses ubi9/go-toolset:9.8-1781070142 which contains Go 1.26.3,
+# matching go.mod's `go 1.26.0` directive. The 1.22-* tags only ship Go 1.22
+# and cannot consume k8s.io/client-go v0.36.2's prebuilt packages.
+FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1781070142 AS build
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -18,7 +16,7 @@ COPY scripts/ scripts/
 RUN ./scripts/fetch-htmx.sh && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/helper ./cmd/helper
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.4
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8
 RUN microdnf install -y --setopt=tsflags=nodocs ca-certificates && \
     microdnf clean all
 
