@@ -12,6 +12,9 @@
     <span class="hdr-subtitle">企业级 FRS 文件浏览</span>
     <span class="hdr-user"><a href="/logout">退出</a></span>
   </header>
-  {{template "body" .}}
+  {{if eq .BodyTemplate "login_body"}}{{template "login_body" .}}{{end}}
+  {{if eq .BodyTemplate "sessions_body"}}{{template "sessions_body" .}}{{end}}
+  {{if eq .BodyTemplate "browse_body"}}{{template "browse_body" .}}{{end}}
+  {{if eq .BodyTemplate "error_body"}}{{template "error_body" .}}{{end}}
 </body>
 </html>{{end}}

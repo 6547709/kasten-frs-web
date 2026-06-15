@@ -112,8 +112,9 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
-		"Title": "活跃 FRS 会话",
-		"FRS":   frsList,
+		"Title":         "活跃 FRS 会话",
+		"BodyTemplate":  "sessions_body",
+		"FRS":           frsList,
 	}); err != nil {
 		slog.Error("render sessions", "err", err)
 	}
@@ -167,10 +168,11 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
-		"Title":   "浏览 " + ref.Namespace + "/" + ref.Name,
-		"FRS":     ref,
-		"Path":    path,
-		"Entries": entries,
+		"Title":         "浏览 " + ref.Namespace + "/" + ref.Name,
+		"BodyTemplate":  "browse_body",
+		"FRS":           ref,
+		"Path":          path,
+		"Entries":       entries,
 	}); err != nil {
 		slog.Error("render browse", "err", err)
 	}
