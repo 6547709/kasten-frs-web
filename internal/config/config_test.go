@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,5 +74,18 @@ func TestLoad_Overrides(t *testing.T) {
 	}
 	if cfg.FRSPort != 2222 {
 		t.Errorf("FRSPort = %d, want 2222", cfg.FRSPort)
+	}
+}
+
+func TestLoad_ShortCookieSecret(t *testing.T) {
+	t.Setenv("HELPER_USERNAME", "admin")
+	t.Setenv("HELPER_PASSWORD", "secret123")
+	t.Setenv("HELPER_COOKIE_SECRET", "short") // 5 bytes, below 16-byte minimum
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for short cookie secret")
+	}
+	if !strings.Contains(err.Error(), "HELPER_COOKIE_SECRET") {
+		t.Errorf("error should name HELPER_COOKIE_SECRET, got: %v", err)
 	}
 }
