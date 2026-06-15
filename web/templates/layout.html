@@ -15,10 +15,9 @@
 <div class="app">
 
   <header class="ribbon">
-    <span class="brand">Kasten <span class="accent">FRS</span> Web Helper<span class="version">v0.2.0</span></span>
+    <span class="brand">Kasten <span class="accent">FRS</span> Web Helper<span class="version">v0.2.2</span></span>
     <nav class="nav">
       <a class="nav-item active" href="/sessions">Home</a>
-      <a class="nav-item" href="/sessions">FRS Browser</a>
     </nav>
     <span class="spacer"></span>
     <span class="status-pill"><span class="dot"></span>Connected</span>
@@ -27,13 +26,10 @@
 
   <aside class="sidebar">
     <div class="section">
-      <div class="section-title">Quick Access</div>
+      <div class="section-title">Browse</div>
       <a class="item {{if eq .BodyTemplate "sessions_body"}}active{{end}}" href="/sessions">
         <span class="ico">⊟</span><span class="lbl">FRS Sessions</span>
       </a>
-    </div>
-    <div class="section">
-      <div class="section-title">Browse</div>
       <a class="item" href="/sessions"><span class="ico">↻</span><span class="lbl">Refresh</span></a>
       <a class="item" href="/logout"><span class="ico">⏻</span><span class="lbl">Sign Out</span></a>
     </div>
@@ -72,7 +68,7 @@
     <span>Path: <strong>{{.Path}}</strong></span>
     {{if .Entries}}<span>Items: <strong>{{len .Entries}}</strong></span>{{end}}
     {{end}}
-    <span class="right">Kasten FRS Web Helper · v0.2.0</span>
+    <span class="right">Kasten FRS Web Helper · v0.2.2</span>
   </footer>
 
 </div>

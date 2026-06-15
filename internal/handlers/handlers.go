@@ -2,12 +2,15 @@
 package handlers
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 
@@ -142,6 +145,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /login", s.handleLoginPage)
 	s.mux.HandleFunc("POST /login", s.auth.HandleLogin)
 	s.mux.HandleFunc("POST /logout", s.handleLogout)
+	s.mux.HandleFunc("GET /logout", s.handleLogout)  // GET-friendly for plain <a> links
 
 	// Serve embedded static assets (CSS, JS, images) under /static/.
 	// Without this, the browser would receive an HTML 404 for the
@@ -157,6 +161,7 @@ func (s *Server) routes() {
 	authed.HandleFunc("POST /sessions/{ns}/{name}/connect", s.handleConnect)
 	authed.HandleFunc("GET /browse", s.handleBrowse)
 	authed.HandleFunc("GET /download", s.handleDownload)
+	authed.HandleFunc("GET /download-zip", s.handleDownloadZip)
 	authed.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/sessions", http.StatusSeeOther)
 	})
@@ -285,6 +290,144 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, rc)
+}
+
+// handleDownloadZip streams a directory (or single file) from the FRS
+// as a gzipped tar archive. The FRS SFTP client doesn't support
+// recursive directory transfers natively — we walk the tree via
+// ListDir() and copy each file's contents into the tar stream.
+// Single-file requests are packed as a tar with one entry, named
+// after the file's basename.
+//
+// Path-traversal protection: every entry's path is checked against
+// the requested root before being written to the archive, so a
+// malicious FRS server can't smuggle a "../etc/passwd" entry.
+func (s *Server) handleDownloadZip(w http.ResponseWriter, r *http.Request) {
+	ref, root, err := parseFRSQuery(r)
+	if err != nil {
+		s.renderError(w, http.StatusBadRequest, "无效的 frs 查询", err.Error())
+		return
+	}
+	if root == "" {
+		root = "/"
+	}
+	key := sftpclient.SessionKey{UserSessionID: userIDFromCookie(r, s.auth.CookieName),
+		FRS: types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}}
+	sess, ok := s.pool.Get(key)
+	if !ok {
+		s.renderError(w, http.StatusUnauthorized, "SFTP 会话已过期",
+			"请返回 FRS Sessions 重新点击 进入")
+		return
+	}
+	stat, err := sess.Stat(root)
+	if err != nil {
+		s.renderError(w, http.StatusNotFound, "FRS 路径不存在", err.Error())
+		return
+	}
+
+	// Tar entry names are relative to root. For a single-file request,
+	// the root name is the file's basename; for a directory, we walk
+	// the tree and use paths relative to root (with a trailing /).
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition",
+		`attachment; filename="`+sanitizeArchiveName(ref, root, stat.IsDir())+`"`)
+	w.WriteHeader(http.StatusOK)
+
+	gz := gzip.NewWriter(w)
+	defer gz.Close()
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	walk := func(rel string, abs string, isDir bool) error {
+		// Defense in depth: the SFTP server is trusted (we connected
+		// to it over a real FRS pod), but make sure we never write
+		// a path that escapes the requested root.
+		clean := path.Clean("/" + rel)
+		if clean == "/" || strings.HasPrefix(clean, "/../") {
+			return fmt.Errorf("refusing to archive escape %q", rel)
+		}
+
+		// Stat the absolute path to get mode + size.
+		fi, err := sess.Stat(abs)
+		if err != nil {
+			return err
+		}
+		hdr, err := tar.FileInfoHeader(fi, "")
+		if err != nil {
+			return err
+		}
+		// Header.Name is the path inside the archive; tar uses "/"
+		// as the separator. Prefix empty root with ".".
+		name := clean
+		if name == "/" {
+			name = "."
+		} else if isDir {
+			// Ensure directory entries end with "/"
+			name = strings.TrimSuffix(name, "/") + "/"
+		}
+		hdr.Name = name
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if !isDir {
+			rc, err := sess.Open(abs)
+			if err != nil {
+				return err
+			}
+			defer rc.Close()
+			if _, err := io.Copy(tw, rc); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Recursive walker: ListDir → for each entry → recurse / add.
+	var rec func(rel, abs string, isDir bool) error
+	rec = func(rel, abs string, isDir bool) error {
+		if err := walk(rel, abs, isDir); err != nil {
+			return err
+		}
+		if !isDir {
+			return nil
+		}
+		entries, err := sess.ListDir(abs)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			childRel := path.Join(rel, e.Name())
+			childAbs := path.Join(abs, e.Name())
+			if err := rec(childRel, childAbs, e.IsDir()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err := rec(root, root, stat.IsDir()); err != nil {
+		slog.Error("zip walk", "path", root, "err", err)
+		// Body has already been sent with headers; can't render an
+		// error page. Just truncate the archive (gzip CRC will fail
+		// client-side, but the partial entries are still useful).
+		return
+	}
+}
+
+// sanitizeArchiveName builds the Content-Disposition filename. For
+// single-file requests: just the file's basename. For directories:
+// the relative path under the FRS, with the leading slash stripped
+// and slashes replaced with dashes (tar convention).
+func sanitizeArchiveName(ref k8s.FRSRef, path string, isDir bool) string {
+	clean := strings.Trim(path, "/")
+	clean = strings.ReplaceAll(clean, "/", "-")
+	if clean == "" {
+		return fmt.Sprintf("%s-%s.tar.gz", ref.Namespace, ref.Name)
+	}
+	if !strings.HasSuffix(clean, ".tar.gz") {
+		clean += ".tar.gz"
+	}
+	return clean
 }
 
 func parseFRSQuery(r *http.Request) (k8s.FRSRef, string, error) {

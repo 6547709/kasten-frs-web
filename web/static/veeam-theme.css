@@ -441,8 +441,7 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background:
-    linear-gradient(135deg, #1F2D3D 0%, #2C2C2C 60%, #5C2D91 100%);
+  background: var(--k10-bg);   /* matches the rest of the app */
 }
 .login-card {
   background: #FFFFFF;
