@@ -1,0 +1,46 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kasten-frs-web-helper-frs-list
+rules:
+- apiGroups: ["datamover.kio.kasten.io"]
+  resources: ["filerecoverysessions"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kasten-frs-web-helper-frs-list
+subjects:
+- kind: ServiceAccount
+  name: kasten-frs-web-helper
+  namespace: kasten-io
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kasten-frs-web-helper-frs-list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kasten-frs-web-helper-secret-read
+  namespace: kasten-io
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["kasten-frs-helper-private-key"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kasten-frs-web-helper-secret-read
+  namespace: kasten-io
+subjects:
+- kind: ServiceAccount
+  name: kasten-frs-web-helper
+  namespace: kasten-io
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kasten-frs-web-helper-secret-read

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kasten-frs-web-helper-svc
+  namespace: kasten-io
+  labels:
+    app: kasten-frs-web-helper
+spec:
+  selector:
+    app: kasten-frs-web-helper
+  ports:
+  - { name: http, port: 80, targetPort: 8080, protocol: TCP }
