@@ -124,8 +124,18 @@ step1_preflight() {
     svc_count=$(oc get svc -n "$NS" -l "k10.kasten.io/frs-name=$FRS_NAME" -o name | wc -l)
     [ "$svc_count" -ge 1 ] || die "no Service in $NS for FRS $FRS_NAME"
 
-    local code
+    local code token
+    # GHCR's manifest endpoint requires a bearer token even for public
+    # packages, and the multi-arch images are OCI image indexes. Fetch
+    # an anonymous pull-scoped token first, then GET with the right
+    # Accept header (Docker manifest headers return 404 for OCI indexes).
+    token=$(curl -sS \
+        "https://ghcr.io/token?service=ghcr.io&scope=repository:6547709/kasten-frs-web:pull" \
+        | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+    [ -n "$token" ] || die "failed to get ghcr.io anonymous token"
     code=$(curl -sS -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer $token" \
+        -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json" \
         "https://ghcr.io/v2/6547709/kasten-frs-web/manifests/${IMAGE_TAG}")
     [ "$code" = "200" ] || die "ghcr.io manifest for ${IMAGE_TAG} returned $code (expected 200)"
     ok "preflight ok: image ${IMAGE_REPO}:${IMAGE_TAG} reachable, FRS active"
