@@ -15,4 +15,7 @@ func TestNewClient_FakeMode(t *testing.T) {
 	if c.Dynamic() == nil {
 		t.Fatal("Dynamic client nil")
 	}
+	if !c.IsFake() {
+		t.Fatal("IsFake() = false, want true")
+	}
 }

@@ -23,10 +23,9 @@ type ClientOptions struct {
 
 // Client bundles the corev1 and dynamic clientsets.
 type Client struct {
-	core     kubernetes.Interface
-	dyn      dynamic.Interface
-	restCfg  *rest.Config
-	isFake   bool
+	core   kubernetes.Interface
+	dyn    dynamic.Interface
+	isFake bool
 }
 
 // NewClient builds a Kubernetes clientset.
@@ -66,7 +65,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dynamic client: %w", err)
 	}
-	return &Client{core: core, dyn: dyn, restCfg: cfg}, nil
+	return &Client{core: core, dyn: dyn}, nil
 }
 
 // Core returns the corev1 clientset.
