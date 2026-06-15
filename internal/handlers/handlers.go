@@ -14,8 +14,19 @@ import (
 	"github.com/liguoqiang/kasten-frs-web/internal/auth"
 	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
 	"github.com/liguoqiang/kasten-frs-web/internal/sftpclient"
+	"github.com/liguoqiang/kasten-frs-web/web"
 	"k8s.io/apimachinery/pkg/types"
 )
+
+// pageTemplates is loaded once from the embedded web/templates/*.html.
+// layout.html defines the layout template; sessions.html / browse.html
+// each define a `body` template that layout.html includes via
+// {{template "body" .}}. Earlier versions of this handler used inline
+// `sessionsTmpl` / `browseTmpl` string constants which omitted the
+// layout, the per-entry "进入" / "下载" links, and the styling. We
+// load the canonical templates here so the on-disk HTML in
+// web/templates/ is the single source of truth.
+var pageTemplates = template.Must(template.ParseFS(web.Templates(), "templates/*.html"))
 
 // FRSProvider abstracts the K8s FRS calls used by handlers.
 type FRSProvider interface {
@@ -100,12 +111,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	tmpl, err := template.New("sessions").Parse(sessionsTmpl)
-	if err != nil {
-		http.Error(w, "template", http.StatusInternalServerError)
-		return
+	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
+		"Title": "活跃 FRS 会话",
+		"FRS":   frsList,
+	}); err != nil {
+		slog.Error("render sessions", "err", err)
 	}
-	_ = tmpl.Execute(w, map[string]any{"FRS": frsList})
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -155,12 +166,14 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	tmpl, _ := template.New("browse").Parse(browseTmpl)
-	_ = tmpl.Execute(w, map[string]any{
+	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
+		"Title":   "浏览 " + ref.Namespace + "/" + ref.Name,
 		"FRS":     ref,
 		"Path":    path,
 		"Entries": entries,
-	})
+	}); err != nil {
+		slog.Error("render browse", "err", err)
+	}
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -221,15 +234,3 @@ const loginPage = `<!doctype html><html><body><form method="post" action="/login
 <input name="username"><input name="password" type="password">
 <button>Login</button></form></body></html>`
 
-const sessionsTmpl = `<!doctype html><html><body>
-<h1>Sessions</h1><table border=1><tr><th>ns</th><th>name</th><th>state</th><th>action</th></tr>
-{{range .FRS}}<tr><td>{{.Ref.Namespace}}</td><td>{{.Ref.Name}}</td><td>{{.State}}</td>
-<td><form method="post" action="/sessions/{{.Ref.Namespace}}/{{.Ref.Name}}/connect">
-<button>connect</button></form></td></tr>{{end}}</table></body></html>`
-
-const browseTmpl = `<!doctype html><html><body>
-<h1>{{.FRS.Namespace}}/{{.FRS.Name}} at {{.Path}}</h1>
-<ul>
-{{range .Entries}}<li>{{.Name}} ({{.Size}} bytes)</li>{{end}}
-</ul>
-</body></html>`
