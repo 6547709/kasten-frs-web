@@ -277,17 +277,42 @@ step4_wait_probe() {
     ok "pod $POD ready; /healthz and /readyz OK"
 }
 
+step5_netpol() {
+    STEP_NUM=5
+    step "netpol: DNS, K8s API, FRS:2222"
+    oc -n "$NS" exec "$POD" -- nslookup kubernetes.default >>"$LOG_FILE" 2>&1 \
+        || die "DNS lookup kubernetes.default failed"
+
+    local api_code
+    api_code=$(oc -n "$NS" exec "$POD" -- \
+        curl -sS -k -o /dev/null -w '%{http_code}' \
+        https://kubernetes.default.svc/api)
+    [ "$api_code" = "200" ] || die "K8s API returned $api_code (expected 200)"
+
+    local frs_svc
+    frs_svc=$(oc -n "$NS" get svc -l "k10.kasten.io/frs-name=$FRS_NAME" \
+        -o jsonpath='{.items[0].metadata.name}')
+    [ -n "$frs_svc" ] || die "FRS service for $FRS_NAME not found in $NS"
+
+    oc -n "$NS" exec "$POD" -- \
+        bash -c "timeout 3 bash -c '</dev/tcp/${frs_svc}.${NS}.svc.cluster.local/2222' && echo OK" \
+        >>"$LOG_FILE" 2>&1 \
+        || die "TCP connect to FRS :2222 failed (svc=$frs_svc)"
+    ok "netpol: DNS, API, FRS:2222 all reachable"
+}
+
 main() {
     parse_args "$@"
     step1_preflight
     step2_secrets
     step3_overlay_apply
+    step4_wait_probe
     if [ "$SKIP_E2E" = "true" ]; then
         log "skip-e2e set; stopping after preflight"
         exit 0
     fi
-    step4_wait_probe
-    log "(steps 5-8 not yet implemented; this is a checkpoint run)"
+    step5_netpol
+    log "(steps 6-8 not yet implemented; this is a checkpoint run)"
     exit 0
 }
 
