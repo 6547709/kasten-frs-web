@@ -105,4 +105,41 @@ require_env() {
     fi
 }
 
-parse_args "$@"
+step1_preflight() {
+    STEP_NUM=1
+    step "preflight: env / oc / FRS / ghcr.io"
+    require_env
+    require oc
+    require curl
+    oc whoami >/dev/null || die "oc not logged in"
+    [ -f ./k10_frs ] || die "./k10_frs (SSH private key) not found in cwd"
+    chmod 600 ./k10_frs || true
+
+    local frs_active
+    frs_active=$(oc get frs "$FRS_NAME" -n "$FRS_NAMESPACE" \
+        -o jsonpath='{.status.conditions[?(@.type=="IsActive")].status}')
+    [ "$frs_active" = "True" ] || die "FRS $FRS_NAMESPACE/$FRS_NAME IsActive != True (got '$frs_active')"
+
+    local svc_count
+    svc_count=$(oc get svc -n "$NS" -l "k10.kasten.io/frs-name=$FRS_NAME" -o name | wc -l)
+    [ "$svc_count" -ge 1 ] || die "no Service in $NS for FRS $FRS_NAME"
+
+    local code
+    code=$(curl -sS -o /dev/null -w '%{http_code}' \
+        "https://ghcr.io/v2/6547709/kasten-frs-web/manifests/${IMAGE_TAG}")
+    [ "$code" = "200" ] || die "ghcr.io manifest for ${IMAGE_TAG} returned $code (expected 200)"
+    ok "preflight ok: image ${IMAGE_REPO}:${IMAGE_TAG} reachable, FRS active"
+}
+
+main() {
+    parse_args "$@"
+    step1_preflight
+    if [ "$SKIP_E2E" = "true" ]; then
+        log "skip-e2e set; stopping after preflight"
+        exit 0
+    fi
+    log "(steps 2-8 not yet implemented; this is a checkpoint run)"
+    exit 0
+}
+
+main "$@"
