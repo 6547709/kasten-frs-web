@@ -341,9 +341,11 @@ func (s *Server) handleDownloadZip(w http.ResponseWriter, r *http.Request) {
 	walk := func(rel string, abs string, isDir bool) error {
 		// Defense in depth: the SFTP server is trusted (we connected
 		// to it over a real FRS pod), but make sure we never write
-		// a path that escapes the requested root.
+		// a path that escapes the requested root. The root path
+		// itself ("/") normalises to itself and is always safe; any
+		// other path with a "/../" prefix would escape root.
 		clean := path.Clean("/" + rel)
-		if clean == "/" || strings.HasPrefix(clean, "/../") {
+		if clean != "/" && strings.HasPrefix(clean, "/../") {
 			return fmt.Errorf("refusing to archive escape %q", rel)
 		}
 
