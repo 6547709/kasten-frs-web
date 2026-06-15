@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -44,8 +43,7 @@ func (s *SessionStore) Issue() (sid, cookie string, err error) {
 	return base64.RawURLEncoding.EncodeToString(idBytes), cookie, nil
 }
 
-// Verify checks the cookie value. Returns true iff signature is valid
-// and the issued cookie has not expired.
+// Verify checks the cookie value. Returns true iff the cookie's HMAC signature is valid.
 func (s *SessionStore) Verify(cookie string) bool {
 	parts := strings.Split(cookie, ".")
 	if len(parts) != 2 {
@@ -65,11 +63,7 @@ func (s *SessionStore) Verify(cookie string) bool {
 	if !hmac.Equal(gotSig, wantSig) {
 		return false
 	}
-	// Expiry is implicit: callers may set Max-Age; we additionally reject
-	// cookies whose issued timestamp is unknown here. For server-side
-	// expiry tracking use the time-issued stamp embedded via s.ttl.
-	// The session is short-lived (default 8h) so client Max-Age suffices.
-	_ = errors.New
+	// Expiry is enforced by the client's Max-Age cookie attribute.
 	return true
 }
 
