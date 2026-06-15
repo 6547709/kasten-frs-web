@@ -2,7 +2,7 @@ GO ?= go
 BIN := bin/helper
 LDFLAGS := -s -w
 
-.PHONY: build test test-race test-cover lint fmt vet run clean
+.PHONY: build test test-race test-cover lint fmt vet run clean fetch-htmx
 
 build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/helper
@@ -32,3 +32,6 @@ run: build
 
 clean:
 	rm -f $(BIN) coverage.out
+
+fetch-htmx:
+	./scripts/fetch-htmx.sh
