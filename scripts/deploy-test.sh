@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
+#
 # deploy-test.sh — end-to-end deployment test for kasten-frs-web.
-# See docs/superpowers/specs/2026-06-15-kasten-frs-web-deploy-test-design.md.
+#
+# Drives the kasten-frs-web Helper image (ghcr.io/6547709/kasten-frs-web)
+# through preflight → secrets → kustomize apply → wait/probe → netpol
+# → Route e2e, on an OpenShift 4 cluster with KUBECONFIG set.
+#
+# Usage:
+#   HELPER_USERNAME=admin HELPER_PASSWORD=... HELPER_COOKIE_SECRET=... \
+#     bash scripts/deploy-test.sh [--cleanup] [--skip-e2e] [--tag <tag>]
+#
+# Design: docs/superpowers/specs/2026-06-15-kasten-frs-web-deploy-test-design.md
 
 set -euo pipefail
 
