@@ -27,34 +27,29 @@ warn()  { printf '%s %s\n' "$(_color 33 'WARN')" "$*" >&2; }
 err()   { printf '%s %s\n' "$(_color 31 'ERR ')" "$*" >&2; }
 die()   { err "$*"; exit 1; }
 
-step() {
-    STEP_NAME="$*"
-    log "[step $STEP_NUM] $STEP_NAME"
-    printf '=== STEP %s :: %s ===\n' "$STEP_NUM" "$STEP_NAME" >> "$LOG_FILE"
+# Tracks the last-entered step's name and number so the ERR trap can
+# report which step failed even if a step's body aborts before we get
+# to log(). Reset to empty at the start of each step.
+LAST_STEP_NUM=""
+LAST_STEP_NAME=""
+
+# step_start <n> <name> — record the current step and log the header.
+step_start() {
+    LAST_STEP_NUM="$1"
+    LAST_STEP_NAME="$2"
+    log "[step $LAST_STEP_NUM] $LAST_STEP_NAME"
+    printf '=== STEP %s :: %s ===\n' "$LAST_STEP_NUM" "$LAST_STEP_NAME" >> "$LOG_FILE"
 }
 
 require() {
     command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
-# curl wrapper: fail-fast, silent, follow redirects, capture body & status.
-# Usage: curl_pretty URL OUT_VAR STATUS_VAR
-curl_pretty() {
-    local url="$1" out_var="$2" status_var="$3"
-    local body status
-    body=$(curl -sS -L -k -o /dev/null -w '%{http_code}' "$url" 2>>"$LOG_FILE") \
-        || { err "curl failed for $url (see $LOG_FILE)"; return 1; }
-    status="$body"
-    body=$(curl -sS -L -k "$url")
-    printf -v "$out_var" '%s' "$body"
-    printf -v "$status_var" '%s' "$status"
-}
-
 trap 'on_err $? $LINENO' ERR
 
 on_err() {
     local rc=$1 line=$2
-    err "FAIL at step ${STEP_NUM:-?}: ${STEP_NAME:-?} (line $line, rc=$rc)"
+    err "FAIL at step ${LAST_STEP_NUM:-?}: ${LAST_STEP_NAME:-?} (line $line, rc=$rc)"
     echo "--- last 30 lines of $LOG_FILE ---" >&2
     tail -n 30 "$LOG_FILE" >&2 || true
     if [ -n "${POD:-}" ]; then
@@ -118,8 +113,7 @@ require_env() {
 }
 
 step1_preflight() {
-    STEP_NUM=1
-    step "preflight: env / oc / FRS / ghcr.io"
+    step_start 1 "preflight: env / oc / FRS / ghcr.io"
     require_env
     require oc
     require curl
@@ -154,8 +148,7 @@ step1_preflight() {
 }
 
 step2_secrets() {
-    STEP_NUM=2
-    step "secrets: credentials + ssh private key"
+    step_start 2 "secrets: credentials + ssh private key"
     oc -n "$NS" create secret generic kasten-frs-web-helper-credentials \
         --from-literal="HELPER_USERNAME=$HELPER_USERNAME" \
         --from-literal="HELPER_PASSWORD=$HELPER_PASSWORD" \
@@ -180,8 +173,7 @@ step2_secrets() {
 }
 
 step3_overlay_apply() {
-    STEP_NUM=3
-    step "overlay: kustomize image override + apply"
+    step_start 3 "overlay: kustomize image override + apply"
     # Resolve script's own location to an absolute path. BASH_SOURCE[0] is
     # relative when the script is invoked as `bash scripts/deploy-test.sh`,
     # so we must absolutize before the inner `cd`, otherwise the path
@@ -272,8 +264,7 @@ YAML
 }
 
 step4_wait_probe() {
-    STEP_NUM=4
-    step "wait + probe: pod Ready, /healthz, /readyz"
+    step_start 4 "wait + probe: pod Ready, /healthz, /readyz"
     oc -n "$NS" wait --for=condition=Ready pod -l "$DEPLOY_LABEL" \
         --timeout=180s >>"$LOG_FILE" 2>&1 \
         || die "pod did not become Ready within 180s"
@@ -288,8 +279,7 @@ step4_wait_probe() {
 }
 
 step5_netpol() {
-    STEP_NUM=5
-    step "netpol: DNS, K8s API, FRS:2222"
+    step_start 5 "netpol: DNS, K8s API, FRS:2222"
     oc -n "$NS" exec "$POD" -- nslookup kubernetes.default >>"$LOG_FILE" 2>&1 \
         || die "DNS lookup kubernetes.default failed"
 
@@ -312,8 +302,7 @@ step5_netpol() {
 }
 
 step6_e2e() {
-    STEP_NUM=6
-    step "e2e: Route, login, /sessions, connect, /browse"
+    step_start 6 "e2e: Route, login, /sessions, connect, /browse"
     ROUTE_HOST=$(oc -n "$NS" get route kasten-frs-web-helper \
         -o jsonpath='{.spec.host}')
     [ -n "$ROUTE_HOST" ] || die "Route kasten-frs-web-helper has no host"
@@ -359,8 +348,7 @@ step6_e2e() {
 }
 
 step7_summary() {
-    STEP_NUM=7
-    step "summary"
+    step_start 7 "summary"
     cat <<SUMMARY
 === DEPLOY TEST SUMMARY ===
 image:    ${IMAGE_REPO}:${IMAGE_TAG}
@@ -396,11 +384,14 @@ main() {
     step3_overlay_apply
     step4_wait_probe
     step5_netpol
-    step6_e2e
+    # SKIP_E2E is checked *before* step6_e2e so the flag's name matches
+    # its behavior: a user who passes --skip-e2e to "verify the deploy
+    # without hitting the public Route" gets exactly that.
     if [ "$SKIP_E2E" = "true" ]; then
-        log "skip-e2e set; stopping after preflight"
+        log "skip-e2e set; stopping after netpol"
         exit 0
     fi
+    step6_e2e
     step7_summary
     [ "$CLEANUP" = "true" ] && cleanup
     exit 0
