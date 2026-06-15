@@ -54,3 +54,55 @@ on_err() {
     fi
     exit "$rc"
 }
+
+# ---- globals & config ----
+IMAGE_REPO="ghcr.io/6547709/kasten-frs-web"
+IMAGE_TAG="${IMAGE_TAG:-main}"
+FRS_NAME="${FRS_NAME:-my-frs-2}"
+FRS_NAMESPACE="${FRS_NAMESPACE:-default}"
+NS="kasten-io"
+LOGIN_USER_KEY="HELPER_USERNAME"
+LOGIN_PASS_KEY="HELPER_PASSWORD"
+COOKIE_SECRET_KEY="HELPER_COOKIE_SECRET"
+HELPER_PASSWORD_MIN="${HELPER_PASSWORD_MIN:-16}"
+DEPLOY_LABEL="app=kasten-frs-web-helper"
+CLEANUP="false"
+SKIP_E2E="false"
+POD=""
+ROUTE_HOST=""
+BASE=""
+COOKIE_JAR=""
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --cleanup)  CLEANUP=true; shift ;;
+            --skip-e2e) SKIP_E2E=true; shift ;;
+            --tag)      IMAGE_TAG="$2"; shift 2 ;;
+            --frs)      FRS_NAME="$2"; shift 2 ;;
+            -h|--help)
+                cat <<USAGE
+Usage: $0 [--cleanup] [--skip-e2e] [--tag <tag>] [--frs <name>]
+Env:   HELPER_USERNAME  HELPER_PASSWORD  HELPER_COOKIE_SECRET
+       HELPER_PASSWORD_MIN  (default 16)  LOG_FILE  (default /tmp/kfrs-test/deploy-test.log)
+USAGE
+                exit 0 ;;
+            *) die "unknown arg: $1" ;;
+        esac
+    done
+}
+
+require_env() {
+    for k in "$LOGIN_USER_KEY" "$LOGIN_PASS_KEY" "$COOKIE_SECRET_KEY"; do
+        [ -n "${!k:-}" ] || die "env $k is required"
+    done
+    local min_pw="$HELPER_PASSWORD_MIN"
+    if [ "${#HELPER_PASSWORD}" -lt "$min_pw" ]; then
+        warn "HELPER_PASSWORD length ${#HELPER_PASSWORD} < $min_pw (test-env override)"
+    fi
+    if [ "${#HELPER_COOKIE_SECRET}" -lt 16 ]; then
+        die "HELPER_COOKIE_SECRET length ${#HELPER_COOKIE_SECRET} < 16"
+    fi
+}
+
+parse_args "$@"
