@@ -31,7 +31,7 @@ func newTestServer(t *testing.T) *Server {
 		auth.NewSessionStore([]byte("0123456789abcdef0123456789abcdef"), 8*60*60*1e9),
 		"kfrs_sid",
 	)
-	srv := New(a, pool, sftpclient.FakeFRSProvider(t, ts.Addr().String(), ts.HostKeyString()),
+	srv := New(a, pool, FakeFRSProvider(t, ts.Addr().String(), ts.HostKeyString()),
 		"root", 2222, []string{ts.Addr().String()})
 	return srv
 }

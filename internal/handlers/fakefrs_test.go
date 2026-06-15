@@ -1,4 +1,4 @@
-package sftpclient
+package handlers
 
 import (
 	"context"
@@ -9,10 +9,6 @@ import (
 	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
 )
 
-// FakeFRSProvider returns a FRSProvider (used by handler tests).
-// It exposes one active FRS pointing at the testserver.
-//
-// The returned provider implements only the methods used by handlers.
 type fakeFRS struct {
 	ns      string
 	name    string
@@ -21,7 +17,6 @@ type fakeFRS struct {
 	hostKey string
 }
 
-// FakeFRSProvider builds a fake provider for handler tests. Not used in production.
 func FakeFRSProvider(t *testing.T, hostPort, hostKey string) *fakeFRS {
 	t.Helper()
 	return &fakeFRS{
