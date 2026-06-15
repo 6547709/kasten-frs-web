@@ -210,16 +210,33 @@ YAML
     ok "applied overlay; image is $actual"
 }
 
+step4_wait_probe() {
+    STEP_NUM=4
+    step "wait + probe: pod Ready, /healthz, /readyz"
+    oc -n "$NS" wait --for=condition=Ready pod -l "$DEPLOY_LABEL" \
+        --timeout=180s >>"$LOG_FILE" 2>&1 \
+        || die "pod did not become Ready within 180s"
+    POD=$(oc -n "$NS" get pod -l "$DEPLOY_LABEL" \
+        -o jsonpath='{.items[0].metadata.name}')
+    [ -n "$POD" ] || die "no pod found for label $DEPLOY_LABEL"
+    oc -n "$NS" exec "$POD" -- curl -fsS http://127.0.0.1:8080/healthz >>"$LOG_FILE" 2>&1 \
+        || die "/healthz probe failed"
+    oc -n "$NS" exec "$POD" -- curl -fsS http://127.0.0.1:8080/readyz >>"$LOG_FILE" 2>&1 \
+        || die "/readyz probe failed"
+    ok "pod $POD ready; /healthz and /readyz OK"
+}
+
 main() {
     parse_args "$@"
     step1_preflight
     step2_secrets
+    step3_overlay_apply
     if [ "$SKIP_E2E" = "true" ]; then
         log "skip-e2e set; stopping after preflight"
         exit 0
     fi
-    step3_overlay_apply
-    log "(steps 4-8 not yet implemented; this is a checkpoint run)"
+    step4_wait_probe
+    log "(steps 5-8 not yet implemented; this is a checkpoint run)"
     exit 0
 }
 
