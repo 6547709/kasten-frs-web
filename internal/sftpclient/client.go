@@ -27,26 +27,27 @@ type ClientConfig struct {
 type Client struct {
 	username string
 	signer   ssh.Signer
-	hostKey  ssh.PublicKey
 	timeout  time.Duration
 }
 
-// NewClient parses the host key signature and validates config.
+// NewClient validates config. HostKeySig is accepted (and validated if
+// provided) for early failure detection, but Dial does not use it; the
+// per-FRS host key is passed to Dial directly.
 func NewClient(cfg ClientConfig) (*Client, error) {
 	if cfg.Signer == nil {
 		return nil, errors.New("signer required")
 	}
-	hostKey, err := ParseHostKeySignature(cfg.HostKeySig)
-	if err != nil {
-		return nil, fmt.Errorf("parse host key: %w", err)
-	}
 	if cfg.Username == "" {
 		return nil, errors.New("username required")
+	}
+	if cfg.HostKeySig != "" {
+		if _, err := ParseHostKeySignature(cfg.HostKeySig); err != nil {
+			return nil, fmt.Errorf("parse host key: %w", err)
+		}
 	}
 	return &Client{
 		username: cfg.Username,
 		signer:   cfg.Signer,
-		hostKey:  hostKey,
 		timeout:  cfg.ConnectTimeout,
 	}, nil
 }
@@ -99,12 +100,18 @@ func (s *Session) Stat(path string) (os.FileInfo, error) {
 	return s.sftp.Stat(path)
 }
 
-// Dial establishes a new SFTP session to the given tcp address.
-func (c *Client) Dial(ctx context.Context, addr string) (*Session, error) {
+// Dial establishes a new SFTP session to the given tcp address. The host
+// key signature is supplied per-call so a single Client can serve dials to
+// FRSs with different host keys without locking.
+func (c *Client) Dial(ctx context.Context, addr, hostKeySig string) (*Session, error) {
+	hostKey, err := ParseHostKeySignature(hostKeySig)
+	if err != nil {
+		return nil, fmt.Errorf("parse host key: %w", err)
+	}
 	cfg := &ssh.ClientConfig{
 		User:            c.username,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(c.signer)},
-		HostKeyCallback: ssh.FixedHostKey(c.hostKey),
+		HostKeyCallback: ssh.FixedHostKey(hostKey),
 		Timeout:         c.timeout,
 	}
 	sshConn, err := ssh.Dial("tcp", addr, cfg)

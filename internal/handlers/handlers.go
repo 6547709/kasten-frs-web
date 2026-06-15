@@ -124,7 +124,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	addr := fmt.Sprintf("%s.%s.svc.cluster.local:%d", view.ServiceName, view.ServiceNS, view.Port)
-	sess, err := s.pool.Client().Dial(r.Context(), addr)
+	sess, err := s.pool.Client().Dial(r.Context(), addr, view.HostKeySig)
 	if err != nil {
 		http.Error(w, "SFTP connect: "+err.Error(), http.StatusBadGateway)
 		return

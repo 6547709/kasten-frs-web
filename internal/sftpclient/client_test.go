@@ -24,7 +24,7 @@ func TestClient_DialListRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sess, err := c.Dial(context.Background(), addr)
+	sess, err := c.Dial(context.Background(), addr, hostKeySig)
 	if err != nil {
 		t.Fatal(err)
 	}
