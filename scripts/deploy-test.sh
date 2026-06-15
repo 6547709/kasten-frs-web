@@ -74,6 +74,7 @@ HELPER_PASSWORD_MIN="${HELPER_PASSWORD_MIN:-16}"
 DEPLOY_LABEL="app=kasten-frs-web-helper"
 CLEANUP="false"
 SKIP_E2E="false"
+ALLOW_FRS_INACTIVE="false"
 POD=""
 ROUTE_HOST=""
 BASE=""
@@ -85,11 +86,12 @@ parse_args() {
         case "$1" in
             --cleanup)  CLEANUP=true; shift ;;
             --skip-e2e) SKIP_E2E=true; shift ;;
+            --allow-frs-inactive) ALLOW_FRS_INACTIVE=true; shift ;;
             --tag)      IMAGE_TAG="$2"; shift 2 ;;
             --frs)      FRS_NAME="$2"; shift 2 ;;
             -h|--help)
                 cat <<USAGE
-Usage: $0 [--cleanup] [--skip-e2e] [--tag <tag>] [--frs <name>]
+Usage: $0 [--cleanup] [--skip-e2e] [--allow-frs-inactive] [--tag <tag>] [--frs <name>]
 Env:   HELPER_USERNAME  HELPER_PASSWORD  HELPER_COOKIE_SECRET
        HELPER_PASSWORD_MIN  (default 16)  LOG_FILE  (default /tmp/kfrs-test/deploy-test.log)
 USAGE
@@ -124,11 +126,23 @@ step1_preflight() {
     local frs_active
     frs_active=$(oc get frs "$FRS_NAME" -n "$FRS_NAMESPACE" \
         -o jsonpath='{.status.conditions[?(@.type=="IsActive")].status}')
-    [ "$frs_active" = "True" ] || die "FRS $FRS_NAMESPACE/$FRS_NAME IsActive != True (got '$frs_active')"
+    if [ "$frs_active" = "True" ]; then
+        :
+    elif [ "$ALLOW_FRS_INACTIVE" = "true" ]; then
+        warn "FRS $FRS_NAMESPACE/$FRS_NAME IsActive != True (got '$frs_active'); continuing due to --allow-frs-inactive"
+    else
+        die "FRS $FRS_NAMESPACE/$FRS_NAME IsActive != True (got '$frs_active')"
+    fi
 
     local svc_count
     svc_count=$(oc get svc -n "$NS" -l "k10.kasten.io/frs-name=$FRS_NAME" -o name | wc -l)
-    [ "$svc_count" -ge 1 ] || die "no Service in $NS for FRS $FRS_NAME"
+    if [ "$svc_count" -ge 1 ]; then
+        :
+    elif [ "$ALLOW_FRS_INACTIVE" = "true" ]; then
+        warn "no Service in $NS for FRS $FRS_NAME; continuing due to --allow-frs-inactive"
+    else
+        die "no Service in $NS for FRS $FRS_NAME"
+    fi
 
     local code token
     # GHCR's manifest endpoint requires a bearer token even for public
@@ -227,31 +241,38 @@ patches:
       name: kasten-frs-web-helper
     patch: |-
       # K10's default-deny netpol (selector={}, policyTypes=[Ingress]) blocks
-      # all ingress to kasten-io pods. Our netpol only allows ingress on 8080
-      # from openshift-ingress, so the helper cannot receive responses from
-      # the kube-apiserver (secret GET at startup) or the FRS pod (SFTP).
-      # Add ingress allow rules for the apiserver namespace and the FRS
-      # namespace (default).
-      - op: add
-        path: /spec/ingress/-
+      # all ingress to kasten-io pods. deploy/50-networkpolicy.yaml adds
+      # port-8080 ingress from openshift-ingress, but at runtime the
+      # helper still fails to load its private key from the kube-apiserver
+      # unless it can both send to 192.4.0.1:443 AND receive the apiserver
+      # response on its ephemeral source port.
+      #
+      # Empirically: OVN-K treats kube-apiserver (in openshift-apiserver)
+      # as system traffic; an egress allowlist using namespaceSelector
+      # or podSelector on the destination does NOT match it, even with
+      # explicit labels. So we replace the netpol's egress and ingress
+      # wholesale:
+      #   - egress to {}: allow all egress. K10's own pods in kasten-io
+      #     have the same posture (their netpols are Ingress-only).
+      #   - ingress from openshift-ingress on 8080: the Route traffic.
+      #   - All other ingress allowed (matches K10 pod behavior).
+      #
+      # Use strategic-merge replace (op=replace) since the existing
+      # egress list has multiple rules we want to wipe.
+      - op: replace
+        path: /spec/egress
         value:
-          from:
-            - namespaceSelector:
-                matchLabels:
-                  kubernetes.io/metadata.name: openshift-apiserver
-          ports:
-            - protocol: TCP
-              port: 443
-      - op: add
-        path: /spec/ingress/-
+          - {}
+      - op: replace
+        path: /spec/ingress
         value:
-          from:
-            - namespaceSelector:
-                matchLabels:
-                  kubernetes.io/metadata.name: default
-          ports:
-            - protocol: TCP
-              port: 2222
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    network.openshift.io/policy-group: ingress
+            ports:
+              - port: 8080
+                protocol: TCP
 YAML
     oc apply -k "$OVERLAY_DIR/" >>"$LOG_FILE" 2>&1
     local actual
