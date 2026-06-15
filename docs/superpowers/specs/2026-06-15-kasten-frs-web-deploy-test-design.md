@@ -64,8 +64,11 @@ scripts/deploy-test.sh
   - `oc whoami` 非空
   - `oc get frs my-frs-2 -n default -o jsonpath='{.status.conditions[?(@.type=="IsActive")].status}'` = `True`
   - `oc get svc -n kasten-io -l k10.kasten.io/frs-name=my-frs-2 -o name` 至少一条
-- 校验镜像：用 ghcr.io 匿名 token GET
-  `https://ghcr.io/v2/6547709/kasten-frs-web/manifests/main` 期望 200
+- 校验镜像：用 ghcr.io 匿名 token + OCI Accept 头 GET
+  `https://ghcr.io/v2/6547709/kasten-frs-web/manifests/${IMAGE_TAG}` 期望 200。
+  GHCR 对匿名 manifest 端点返回 401，OCI 多架构索引在 Docker Accept 头下
+  返回 404，必须先取 token、再用
+  `Accept: application/vnd.oci.image.index.v1+json`。
 
 ### 4.2 secrets
 
