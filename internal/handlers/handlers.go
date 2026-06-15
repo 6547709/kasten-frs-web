@@ -303,3 +303,22 @@ func baseName(p string) string {
 	return p[i+1:]
 }
 
+// renderError writes a Kasten-styled error page for the given
+// HTTP status, title, and message. Use this for user-facing
+// failures (FRS unavailable, SFTP not found, etc.) so users see
+// the same chrome as the rest of the app. Lower-level failures
+// (auth header missing, internal BadGateway on K8s API errors)
+// can keep using http.Error() — those aren't user-actionable.
+func (s *Server) renderError(w http.ResponseWriter, status int, title, msg string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
+		"Title":        title,
+		"BodyTemplate": "error_body",
+		"Message":      msg,
+		"User":         s.auth.Username,
+	}); err != nil {
+		slog.Error("render error page", "title", title, "err", err)
+	}
+}
+
