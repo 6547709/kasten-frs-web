@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/liguoqiang/kasten-frs-web/internal/auth"
 	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
@@ -96,9 +97,18 @@ func joinPath(parent, leaf string) string {
 }
 
 // FRSProvider abstracts the K8s FRS calls used by handlers.
+// The wizard (Task 8) added ListVMs / ListRestorePoints /
+// GetRestorePointDetails / CreateFRS / DeleteFRS / WaitForReady
+// on top of the original ListActiveFRS / GetFRS pair.
 type FRSProvider interface {
 	ListActiveFRS(ctx context.Context, namespaces []string) ([]k8s.FRSView, error)
 	GetFRS(ctx context.Context, ref k8s.FRSRef) (k8s.FRSView, error)
+	ListVMs(ctx context.Context, namespaces []string) ([]k8s.VM, error)
+	ListRestorePoints(ctx context.Context, ns, appName string) ([]k8s.RestorePoint, error)
+	GetRestorePointDetails(ctx context.Context, ns, name string) ([]k8s.VolumeArtifact, error)
+	CreateFRS(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error)
+	DeleteFRS(ctx context.Context, ns, name string) error
+	WaitForReady(ctx context.Context, ns, name string, timeout time.Duration) (k8s.FRSView, error)
 }
 
 // Server wires auth, SFTP pool, and FRS provider into a *http.ServeMux.
@@ -112,6 +122,15 @@ type Server struct {
 	frsPort     int
 	nsWhitelist []string
 	logger      *slog.Logger
+	// watches tracks in-flight FRSes created by the wizard
+	// (Task 8). Keyed by FRSRef; entry is set to "Pending" on
+	// create and updated to "Ready"/"Failed"/"Timeout" by a
+	// background goroutine that runs WaitForReady.
+	watches *watchMap
+	// frsTimeout bounds how long the wizard's ready-watcher
+	// goroutine will wait for an FRS to become Ready before
+	// marking it as Timeout in the watch map. Default 30s.
+	frsTimeout time.Duration
 }
 
 // New builds a Server.
@@ -127,6 +146,8 @@ func New(a *auth.Authenticator, pool *sftpclient.Pool, frs FRSProvider,
 		frsPort:     frsPort,
 		nsWhitelist: nsWhitelist,
 		logger:      slog.Default(),
+		watches:     &watchMap{m: make(map[k8s.FRSRef]*watchState)},
+		frsTimeout:  30 * time.Second,
 	}
 	s.routes()
 	return s
@@ -164,6 +185,15 @@ func (s *Server) routes() {
 	authed.HandleFunc("GET /browse", s.handleBrowse)
 	authed.HandleFunc("GET /download", s.handleDownload)
 	authed.HandleFunc("GET /download-zip", s.handleDownloadZip)
+
+	// Wizard (Task 8): VM picker → RP picker → Volume picker → Create FRS.
+	authed.HandleFunc("GET /wizard", s.handleWizardPage)
+	authed.HandleFunc("GET /wizard/vms", s.handleWizardVMs)
+	authed.HandleFunc("GET /wizard/vms/{ns}/{name}/restorepoints", s.handleWizardRPs)
+	authed.HandleFunc("GET /wizard/rps/{ns}/{name}/details", s.handleWizardVolumes)
+	authed.HandleFunc("POST /wizard/create", s.handleWizardCreate)
+	authed.HandleFunc("POST /wizard/cancel", s.handleWizardCancel)
+
 	authed.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/sessions", http.StatusSeeOther)
 	})
@@ -475,5 +505,43 @@ func (s *Server) renderError(w http.ResponseWriter, status int, title, msg strin
 	}); err != nil {
 		slog.Error("render error page", "title", title, "err", err)
 	}
+}
+
+// FRSProvider method-forwarders. The wizard (Task 8) handlers
+// (in wizard.go) call these rather than reaching through s.frs
+// directly. Reasons:
+//   1. Each call site stays a single line (e.g. frsListVMs) and
+//      doesn't need to re-thread s.nsWhitelist.
+//   2. Tests can stub FRSProvider uniformly; the forwarders
+//      are the same shape as the underlying interface methods.
+//   3. If we later want to inject cross-cutting behavior
+//      (retries, metrics, tracing), it lives in one place.
+
+func (s *Server) frsListVMs(ctx context.Context) ([]k8s.VM, error) {
+	return s.frs.ListVMs(ctx, s.nsWhitelist)
+}
+
+func (s *Server) frsListRPs(ctx context.Context, ns, appName string) ([]k8s.RestorePoint, error) {
+	return s.frs.ListRestorePoints(ctx, ns, appName)
+}
+
+func (s *Server) frsListVolumes(ctx context.Context, ns, name string) ([]k8s.VolumeArtifact, error) {
+	return s.frs.GetRestorePointDetails(ctx, ns, name)
+}
+
+func (s *Server) frsGet(ctx context.Context, ref k8s.FRSRef) (k8s.FRSView, error) {
+	return s.frs.GetFRS(ctx, ref)
+}
+
+func (s *Server) frsCreate(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error) {
+	return s.frs.CreateFRS(ctx, ns, spec)
+}
+
+func (s *Server) frsDelete(ctx context.Context, ns, name string) error {
+	return s.frs.DeleteFRS(ctx, ns, name)
+}
+
+func (s *Server) frsWaitReady(ctx context.Context, ref k8s.FRSRef, timeout time.Duration) (k8s.FRSView, error) {
+	return s.frs.WaitForReady(ctx, ref.Namespace, ref.Name, timeout)
 }
 

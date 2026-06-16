@@ -45,3 +45,26 @@ func (f *fakeFRS) GetFRS(_ context.Context, ref k8s.FRSRef) (k8s.FRSView, error)
 		CreatedAt: time.Now(),
 	}, nil
 }
+
+// ListVMs / ListRestorePoints / GetRestorePointDetails /
+// CreateFRS / DeleteFRS / WaitForReady are stubbed here so
+// fakeFRS continues to satisfy the FRSProvider interface after
+// the wizard extension (Task 8). The sessions/browse tests
+// never exercise them.
+
+func (f *fakeFRS) ListVMs(_ context.Context, _ []string) ([]k8s.VM, error) {
+	return nil, nil
+}
+func (f *fakeFRS) ListRestorePoints(_ context.Context, _, _ string) ([]k8s.RestorePoint, error) {
+	return nil, nil
+}
+func (f *fakeFRS) GetRestorePointDetails(_ context.Context, _, _ string) ([]k8s.VolumeArtifact, error) {
+	return nil, nil
+}
+func (f *fakeFRS) CreateFRS(_ context.Context, ns string, _ k8s.FRSpec) (*k8s.FRSView, error) {
+	return &k8s.FRSView{Ref: k8s.FRSRef{Namespace: ns, Name: f.name}}, nil
+}
+func (f *fakeFRS) DeleteFRS(_ context.Context, _, _ string) error { return nil }
+func (f *fakeFRS) WaitForReady(_ context.Context, ns, name string, _ time.Duration) (k8s.FRSView, error) {
+	return k8s.FRSView{Ref: k8s.FRSRef{Namespace: ns, Name: name}, State: "Ready"}, nil
+}
