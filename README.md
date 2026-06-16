@@ -12,6 +12,22 @@ data over HTTPS, in environments where OpenShift Router cannot expose raw SFTP.
 - Prometheus metrics, structured logging
 - NetworkPolicy-aware: explicit egress allowlist for DNS, K8s API, FRS :2222
 
+## Wizard (v0.3.0+)
+
+`/wizard` provides a single-page recovery flow:
+
+1. Pick a VM (filtered by `k10.kasten.io/appType=virtualMachine` label)
+2. Pick a Bound RestorePoint
+3. Pick the PVCs to include
+4. Click **Create FRS**
+
+The helper:
+- generates or derives the SSH keypair on first start (no operator
+  `ssh-keygen` step required)
+- creates the FileRecoverySession via the K8s dynamic client
+- polls the FRS state in-memory; the user sees a "preparing" page
+  until state=Ready, then is redirected to the directory listing
+
 ## Quick start (local)
 
 ```bash
