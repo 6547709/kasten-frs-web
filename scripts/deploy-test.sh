@@ -191,7 +191,11 @@ step2b_rbac_can_i() {
     require kubectl
     # Verify the helper's ServiceAccount can create FRS, read RPs, and
     # write the private-key secret. This is the M1 milestone gate.
-    SA="-n kasten-io sa/kasten-frs-web-helper"
+    # kubectl auth can-i takes `verb resource [resourceName]` and impersonates
+    # the SA via --as=system:serviceaccount:NS:NAME (not `-n ns sa/name`,
+    # which is the `oc get` syntax and confuses kubectl).
+    SA="system:serviceaccount:kasten-io:kasten-frs-web-helper"
+    NS_FOR_SA="kasten-io"
     for v in \
         "create filerecoverysessions.datamover.kio.kasten.io" \
         "delete filerecoverysessions.datamover.kio.kasten.io" \
@@ -201,8 +205,11 @@ step2b_rbac_can_i() {
         "create secret" \
         "update secret" \
         "patch  secret"; do
-        if ! kubectl auth can-i $v $SA; then
-            die "RBAC missing: SA cannot $v ($v $SA)"
+        # $v unquoted on purpose: each entry is 2-3 whitespace-separated tokens
+        # (verb + resource [+ resourceName]); $SA/$NS_FOR_SA quoted to keep them atomic.
+        # shellcheck disable=SC2086
+        if ! kubectl auth can-i $v --as="$SA" -n "$NS_FOR_SA"; then
+            die "RBAC missing: SA cannot $v (as $SA in $NS_FOR_SA)"
         fi
     done
     ok "RBAC can-i checks pass"
