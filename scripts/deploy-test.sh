@@ -196,8 +196,8 @@ step2_secrets() {
     ok "secrets applied (idempotent)"
 }
 
-step2b_rbac_can_i() {
-    step_start "2b" "rbac: auth can-i checks for wizard verbs"
+step3b_rbac_can_i() {
+    step_start "3b" "rbac: auth can-i checks for wizard verbs"
     require oc
     # Verify the helper's ServiceAccount can create FRS, read RPs, and
     # write the private-key secret. This is the M1 milestone gate.
@@ -517,8 +517,8 @@ main() {
     parse_args "$@"
     step1_preflight
     step2_secrets
-    step2b_rbac_can_i
     step3_overlay_apply
+    step3b_rbac_can_i
     step4_wait_probe
     step5_netpol
     # SKIP_E2E is checked *before* step6_e2e so the flag's name matches
