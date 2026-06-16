@@ -216,25 +216,10 @@ images:
   - name: ghcr.io/liguoqiang/kasten-frs-web
     newName: $IMAGE_REPO
     newTag: $IMAGE_TAG
-# OpenShift's restricted-v2 SCC has runAsUser.type=MustRunAsRange and
-# validates against the namespace's allocated UID range (in this cluster
-# 1001100000/10000). deploy/20-deployment.yaml pins runAsUser: 1001 which
-# falls outside that range and is rejected on admission. Strip the explicit
-# runAsUser so the SCC picks one from the namespace range; set fsGroup
-# to the same range so the emptyDir volumes (/tmp, /app/.cache) are writable
-# by the container's kernel UID.
+# Note: deploy/20-deployment.yaml is now SCC-friendly out of the box
+# (runAsUser dropped, fsGroup: 1001100000 set). No Deployment patch
+# is needed in this overlay — only the NetworkPolicy patch below.
 patches:
-  - target:
-      group: apps
-      version: v1
-      kind: Deployment
-      name: kasten-frs-web-helper
-    patch: |-
-      - op: remove
-        path: /spec/template/spec/securityContext/runAsUser
-      - op: add
-        path: /spec/template/spec/securityContext/fsGroup
-        value: 1001100000
   - target:
       group: networking.k8s.io
       version: v1

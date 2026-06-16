@@ -16,9 +16,15 @@ spec:
         app: kasten-frs-web-helper
     spec:
       serviceAccountName: kasten-frs-web-helper
+      # OCP restricted-v2 SCC requires runAsUser to fall inside the
+      # namespace's allocated UID range (MustRunAsRange); pinning
+      # runAsUser: 1001 fails admission in `kasten-io` because the
+      # range is 1001100000/10000. Let the SCC pick a UID, and pin
+      # fsGroup to the range base so /tmp and /app/.cache emptyDirs
+      # are writable for the chosen user. See spec doc for details.
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1001
+        fsGroup: 1001100000
         seccompProfile: { type: RuntimeDefault }
       containers:
       - name: helper
