@@ -226,24 +226,30 @@ func (c *Client) CloneDataVolume(ctx context.Context, ns string, src DataVolumeS
 	})
 	dv.SetNamespace(ns)
 	dv.SetName(dvName)
-	spec := map[string]any{
-		"source": map[string]any{
-			"pvc": map[string]any{
-				"name":      src.SourcePVC,
-				"namespace": src.SourcePVCNS,
-			},
-		},
-		"pvc": map[string]any{
-			"accessModes": src.AccessModes,
-			"resources": map[string]any{
-				"requests": map[string]any{"storage": src.Size},
-			},
+	// Build the DV spec via the unstructured helpers (SetNestedMap /
+	// SetNestedSlice) rather than a single SetNestedMap of nested
+	// map[string]any values. The runtime deep-copy that helper uses
+	// panics on []string accessModes when the source is a literal
+	// []any{} in a map[string]any; flattening it through the typed
+	// setters avoids the panic.
+	_ = unstructured.SetNestedField(dv.Object, map[string]any{
+		"name":      src.SourcePVC,
+		"namespace": src.SourcePVCNS,
+	}, "spec", "source", "pvc")
+	pvcSpec := map[string]any{
+		"resources": map[string]any{
+			"requests": map[string]any{"storage": src.Size},
 		},
 	}
 	if src.StorageClass != "" {
-		spec["pvc"].(map[string]any)["storageClassName"] = src.StorageClass
+		pvcSpec["storageClassName"] = src.StorageClass
 	}
-	_ = unstructured.SetNestedMap(dv.Object, spec, "spec")
+	_ = unstructured.SetNestedMap(dv.Object, pvcSpec, "spec", "pvc")
+	accessModes := make([]any, len(src.AccessModes))
+	for i, m := range src.AccessModes {
+		accessModes[i] = m
+	}
+	_ = unstructured.SetNestedSlice(dv.Object, accessModes, "spec", "pvc", "accessModes")
 
 	out, err := c.dyn.Resource(dvGVR).Namespace(ns).Create(ctx, dv, metav1.CreateOptions{})
 	if err != nil {
