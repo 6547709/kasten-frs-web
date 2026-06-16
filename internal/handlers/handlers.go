@@ -186,6 +186,7 @@ func (s *Server) routes() {
 	authed.HandleFunc("POST /sessions/{ns}/{name}/connect", s.handleConnect)
 	authed.HandleFunc("POST /sessions/{ns}/{name}/delete", s.handleSessionDelete)
 	authed.HandleFunc("GET /browse", s.handleBrowse)
+	authed.HandleFunc("POST /browse/extend", s.handleBrowseExtend)
 	authed.HandleFunc("GET /download", s.handleDownload)
 	authed.HandleFunc("GET /download-zip", s.handleDownloadZip)
 
@@ -355,6 +356,37 @@ func errString(e error) string {
 		return ""
 	}
 	return e.Error()
+}
+
+// handleBrowseExtend is the "再等 30 秒" button on the preparing
+// page. Per spec §9 + §15, when WaitForReady times out the user
+// must be able to extend the wait by another 30s instead of giving
+// up. We update the watch map to a fresh Pending state with the
+// current FRS view, then start a new watchFRSCreated goroutine
+// that polls WaitForReady with the configured timeout. The
+// browser is 303-redirected back to /browse where it will see
+// the new Pending state.
+func (s *Server) handleBrowseExtend(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderError(w, http.StatusBadRequest, "表单错误", err.Error())
+		return
+	}
+	frs := r.FormValue("frs")
+	parts := strings.SplitN(frs, "/", 2)
+	if len(parts) != 2 {
+		s.renderError(w, http.StatusBadRequest, "frs 参数错误", frs)
+		return
+	}
+	ref := k8s.FRSRef{Namespace: parts[0], Name: parts[1]}
+	// Fetch the current FRS view to seed the watch map with a sensible initial.
+	v, err := s.frsGet(r.Context(), ref)
+	if err != nil {
+		s.renderError(w, http.StatusBadGateway, "FRS 查询失败", err.Error())
+		return
+	}
+	s.watches.set(ref, &watchState{State: "Pending", View: v})
+	go s.watchFRSCreated(ref, v)
+	http.Redirect(w, r, "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path=/", http.StatusSeeOther)
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {

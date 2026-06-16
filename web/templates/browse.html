@@ -70,6 +70,10 @@
     <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
     <button type="submit" class="danger">取消并删除 FRS</button>
   </form>
+  <form method="post" action="/browse/extend" style="display:inline">
+    <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
+    <button type="submit">再等 30 秒</button>
+  </form>
   <div hx-get="/browse?frs={{.FRS.Namespace}}/{{.FRS.Name}}&path=/&partial=ready"
        hx-trigger="every 2s" hx-swap="outerHTML" style="display:none"></div>
 </div>
