@@ -173,17 +173,24 @@ func (s *Server) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, http.StatusInternalServerError, "无 SSH 公钥", "helper 启动时未加载 SSH 公钥")
 		return
 	}
+	slog.Info("wizard.create",
+		"user", s.auth.Username,
+		"vm_ns", vmNs, "vm_name", vmName,
+		"rp_name", rpName, "pvc_count", len(pvcNames),
+	)
 	view, err := s.frsCreate(r.Context(), vmNs, k8s.FRSpec{
 		RestorePointName: rpName,
 		PVCNames:         pvcNames,
 		SSHUserPublicKey: s.pubKeyPEM,
 	})
 	if err != nil {
+		slog.Error("wizard.create.failed", "user", s.auth.Username, "vm_ns", vmNs, "vm_name", vmName, "err", err)
 		s.renderError(w, http.StatusBadGateway, "创建 FRS 失败", err.Error())
 		return
 	}
 	ref := view.Ref
 	s.watches.set(ref, &watchState{State: "Pending", View: *view})
+	slog.Info("frs.created", "user", s.auth.Username, "frs", ref.Namespace+"/"+ref.Name)
 	go s.watchFRSCreated(ref, *view)
 	http.Redirect(w, r, "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path=/", http.StatusSeeOther)
 }
@@ -207,8 +214,18 @@ func (s *Server) watchFRSCreated(ref k8s.FRSRef, initial k8s.FRSView) {
 			state.State = "Timeout"
 		}
 		state.Err = err
+		slog.Warn("frs.wait.terminal",
+			"frs", ref.Namespace+"/"+ref.Name,
+			"state", state.State,
+			"err", err,
+		)
 	} else {
 		state.State = "Ready"
+		slog.Info("frs.ready",
+			"frs", ref.Namespace+"/"+ref.Name,
+			"port", v.Port,
+			"service", v.ServiceName+"."+v.ServiceNS+".svc.cluster.local",
+		)
 	}
 	s.watches.set(ref, state)
 	_ = initial // initial view is already in the map; future enhancements could diff.

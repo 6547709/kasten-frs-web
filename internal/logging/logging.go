@@ -5,7 +5,9 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
+	"time"
 )
 
 type ctxKey int
@@ -53,4 +55,49 @@ func FromContext(ctx context.Context, base *slog.Logger) *slog.Logger {
 		l = l.With("session_id", v)
 	}
 	return l
+}
+
+// AccessLog returns a middleware that emits one INFO line per request
+// with method, path, status, bytes_written, duration, and remote_addr.
+// Health/readiness probes are filtered so a flapping kubelet doesn't
+// drown out useful traffic in customer-deployed environments.
+func AccessLog(next http.Handler, log *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip probes. They run every few seconds and would dwarf
+		// any real user activity in the log stream.
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		ww := &statusRecorder{ResponseWriter: w, status: 200}
+		next.ServeHTTP(ww, r)
+		log.Info("http",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"query", r.URL.RawQuery,
+			"status", ww.status,
+			"bytes", ww.written,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", r.RemoteAddr,
+			"ua", r.UserAgent(),
+		)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status  int
+	written int64
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(b)
+	r.written += int64(n)
+	return n, err
 }

@@ -24,7 +24,7 @@
           <button type="submit">浏览 ›</button>
         </form>
         <form method="post" action="/sessions/{{.Ref.Namespace}}/{{.Ref.Name}}/delete" style="display:inline"
-              onsubmit="return confirm('结束并删除 FRS {{.Ref.Namespace}}/{{.Ref.Name}}?')">
+              class="confirm-delete" data-confirm="结束并删除 FRS {{.Ref.Namespace}}/{{.Ref.Name}}?">
           <button type="submit" class="danger">结束</button>
         </form>
       </td>

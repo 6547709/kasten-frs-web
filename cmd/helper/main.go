@@ -79,7 +79,12 @@ func run() error {
 	hs := handlers.New(sessions, pool, kc, cfg.FRSDefaultUsername, string(km.PubKeyPEM), cfg.FRSPort, cfg.FRSNamespaceWhitelist, cfg.FRSWaitTimeout, version)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", registry.Handler())
-	mux.Handle("/", server.SecurityHeaders(server.Recoverer(hs.Router())))
+	mux.Handle("/", server.SecurityHeaders(
+		logging.AccessLog(
+			server.Recoverer(hs.Router()),
+			logger,
+		),
+	))
 
 	l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", cfg.Listen, cfg.Port))
 	if err != nil {
