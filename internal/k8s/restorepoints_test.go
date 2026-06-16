@@ -205,3 +205,35 @@ func TestGetRestorePointDetails_ParsePVCs(t *testing.T) {
 		t.Fatalf("got %+v", arts)
 	}
 }
+
+// Nested schema is what K10 ships on the live cluster: PVCs live
+// under status.restorePointDetails.artifacts, each identified by
+// meta.spec.resource="persistentvolumeclaims" + meta.spec.name,
+// not by a flat "kind" field. If parseDetailsPVCs only understood
+// the flat shape the wizard vol list would render empty on a real
+// cluster.
+func TestGetRestorePointDetails_ParsePVCsNested(t *testing.T) {
+	body := []byte(`{
+		"status": {
+			"restorePointDetails": {
+				"artifacts": [
+					{"meta":{"spec":{"resource":"virtualmachines","name":"rocky-9-nginx"}}, "source":{"kind":"virtualmachine"}},
+					{"meta":{"spec":{"resource":"persistentvolumeclaims","name":"rocky-9-nginx-volume"}}, "occupiedSize":"100Gi"}
+				]
+			}
+		}
+	}`)
+	arts, err := parseDetailsPVCs(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(arts) != 1 {
+		t.Fatalf("got %d, want 1", len(arts))
+	}
+	if arts[0].PVCName != "rocky-9-nginx-volume" {
+		t.Errorf("pvc name = %q, want rocky-9-nginx-volume", arts[0].PVCName)
+	}
+	if arts[0].Size != "100Gi" {
+		t.Errorf("size = %q, want 100Gi", arts[0].Size)
+	}
+}

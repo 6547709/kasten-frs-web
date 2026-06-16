@@ -163,7 +163,67 @@ func (c *Client) GetRestorePointDetails(ctx context.Context, ns, name string) ([
 }
 
 // parseDetailsPVCs extracts PVC artifacts from the RestorePoint /details JSON body.
+//
+// K10 has historically returned two different shapes depending on
+// version + the deployment profile that produced the snapshot:
+//
+//   flat:   {"artifacts":[{"kind":"PersistentVolumeClaim","name":"data-pvc",...}]}
+//   nested: {"status":{"restorePointDetails":{"artifacts":[{"meta":{"spec":{"resource":"persistentvolumeclaims","name":"data-pvc",...}}}]}}}
+//
+// Older deployments and unit tests use the flat shape; newer K10
+// (the version our wizard is running against) uses the nested
+// shape. Try the nested one first because that's what we see on
+// the live cluster; fall back to flat so we don't regress older
+// or mirrored deployments.
 func parseDetailsPVCs(body []byte) ([]VolumeArtifact, error) {
+	if arts, ok := extractNestedPVCDetails(body); ok {
+		return arts, nil
+	}
+	return extractFlatPVCDetails(body)
+}
+
+func extractNestedPVCDetails(body []byte) ([]VolumeArtifact, bool) {
+	var doc struct {
+		Status struct {
+			RestorePointDetails struct {
+				Artifacts []map[string]any `json:"artifacts"`
+			} `json:"restorePointDetails"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil, false
+	}
+	artifacts := doc.Status.RestorePointDetails.Artifacts
+	if len(artifacts) == 0 {
+		return nil, false
+	}
+	var out []VolumeArtifact
+	for _, m := range artifacts {
+		meta, ok := m["meta"].(map[string]any)
+		if !ok {
+			continue
+		}
+		spec, ok := meta["spec"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if res, _ := spec["resource"].(string); res != "persistentvolumeclaims" {
+			continue
+		}
+		name, _ := spec["name"].(string)
+		if name == "" {
+			continue
+		}
+		size, _ := m["occupiedSize"].(string)
+		out = append(out, VolumeArtifact{PVCName: name, Size: size})
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+func extractFlatPVCDetails(body []byte) ([]VolumeArtifact, error) {
 	var raw struct {
 		Artifacts []map[string]any `json:"artifacts"`
 	}
