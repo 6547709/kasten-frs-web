@@ -2,10 +2,12 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -117,4 +119,87 @@ func (c *Client) GetFRS(ctx context.Context, ref FRSRef) (FRSView, error) {
 		return FRSView{}, fmt.Errorf("FRS %s/%s not in connectable state", ref.Namespace, ref.Name)
 	}
 	return v, nil
+}
+
+// FRSpec is the spec for creating a FileRecoverySession.
+type FRSpec struct {
+	Name             string   // empty → use generateName: "frs-wizard-"
+	RestorePointName string   // required
+	PVCNames         []string // required, 1+
+	SSHUserPublicKey string   // required, authorized_keys format
+}
+
+// CreateFRS creates a FileRecoverySession. Returns the FRSView on success.
+// A freshly created FRS is typically not yet connectable (no service/port yet);
+// callers should follow with WaitForReady to wait for state=Ready.
+func (c *Client) CreateFRS(ctx context.Context, ns string, spec FRSpec) (*FRSView, error) {
+	if spec.RestorePointName == "" || len(spec.PVCNames) == 0 || spec.SSHUserPublicKey == "" {
+		return nil, fmt.Errorf("FRSpec: all of RestorePointName, PVCNames, SSHUserPublicKey required")
+	}
+	volumes := make([]any, 0, len(spec.PVCNames))
+	for _, p := range spec.PVCNames {
+		volumes = append(volumes, map[string]any{
+			"restorePointName": spec.RestorePointName,
+			"pvcName":          p,
+		})
+	}
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "datamover.kio.kasten.io", Version: "v1alpha1", Kind: "FileRecoverySession",
+	})
+	obj.SetNamespace(ns)
+	if spec.Name != "" {
+		obj.SetName(spec.Name)
+	} else {
+		obj.SetGenerateName("frs-wizard-")
+	}
+	_ = unstructured.SetNestedSlice(obj.Object, volumes, "spec", "volumes")
+	_ = unstructured.SetNestedField(obj.Object, map[string]any{
+		"sftp": map[string]any{"userPublicKey": spec.SSHUserPublicKey},
+	}, "spec", "transports")
+
+	out, err := c.dyn.Resource(FRSGroupVersionResource).Namespace(ns).Create(ctx, obj, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("create FRS: %w", err)
+	}
+	v, _ := buildFRSView(out)
+	return &v, nil
+}
+
+// DeleteFRS deletes a FileRecoverySession. NotFound is not an error.
+func (c *Client) DeleteFRS(ctx context.Context, ns, name string) error {
+	err := c.dyn.Resource(FRSGroupVersionResource).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	if err == nil {
+		return nil
+	}
+	var se *apierrors.StatusError
+	if errors.As(err, &se) && se.ErrStatus.Reason == metav1.StatusReasonNotFound {
+		return nil
+	}
+	return fmt.Errorf("delete FRS: %w", err)
+}
+
+// WaitForReady polls status.state until Ready/Failed/timeout.
+// Returns the latest FRSView.
+func (c *Client) WaitForReady(ctx context.Context, ns, name string, timeout time.Duration) (FRSView, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		v, err := c.GetFRS(ctx, FRSRef{Namespace: ns, Name: name})
+		if err == nil {
+			switch v.State {
+			case "Ready":
+				return v, nil
+			case "Failed":
+				return v, fmt.Errorf("FRS %s/%s reached state=Failed", ns, name)
+			}
+		}
+		if time.Now().After(deadline) {
+			return v, fmt.Errorf("FRS %s/%s did not reach Ready within %s (last state=%q)", ns, name, timeout, v.State)
+		}
+		select {
+		case <-ctx.Done():
+			return v, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
