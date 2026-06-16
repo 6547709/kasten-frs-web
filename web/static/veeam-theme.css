@@ -406,6 +406,10 @@ a:hover { text-decoration: underline; }
   cursor: pointer;
 }
 .simple-table td.action button:hover { background: var(--k10-accent-hover); }
+.badge.warn { background: #FFF4D6; color: #8A6A0A; border-color: #E6C97A; }
+.badge.crit { background: #FFE0E0; color: #B02020; border-color: #D97070; }
+button.danger { background: #B02020; color: #fff; border-color: #B02020; }
+button.danger:hover { background: #D03030; }
 
 /* --- bottom status bar --- */
 .statusbar {
