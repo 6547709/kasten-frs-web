@@ -147,15 +147,16 @@ func (c *Client) ListRestorePoints(ctx context.Context, ns, appName string) ([]R
 }
 
 // GetRestorePointDetails fetches the /details subresource and returns
-// PVC artifacts. The raw subresource is fetched via a REST client.
+// PVC artifacts. Uses an http.Client with the in-cluster bearer token
+// rather than a typed REST client: the dynamic client doesn't expose
+// subresources and the typed REST client wants a GroupVersion +
+// NegotiatedSerializer that the apps.kio.kasten.io API doesn't define
+// in our scheme. DoRaw is sufficient because we only need the raw
+// JSON body for parseDetailsPVCs.
 func (c *Client) GetRestorePointDetails(ctx context.Context, ns, name string) ([]VolumeArtifact, error) {
-	rc, err := buildRESTFor(c)
-	if err != nil {
-		return nil, err
-	}
-	body, err := rc.Get().AbsPath(
+	body, err := c.doK8sRequest(ctx, "GET",
 		fmt.Sprintf("/apis/apps.kio.kasten.io/v1alpha1/namespaces/%s/restorepoints/%s/details", ns, name),
-	).DoRaw(ctx)
+	)
 	if err != nil {
 		return nil, fmt.Errorf("get rp details: %w", err)
 	}

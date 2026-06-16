@@ -81,10 +81,4 @@
   <div hx-get="/browse?frs={{.FRS.Namespace}}/{{.FRS.Name}}&path=/&partial=ready"
        hx-trigger="every 2s" hx-swap="innerHTML" hx-target="closest .browse-preparing"></div>
 </div>
-<script>
-(function(){
-  const start = Date.now();
-  const el = document.getElementById('elapsed');
-  if (el) setInterval(() => { el.textContent = Math.floor((Date.now()-start)/1000); }, 1000);
-})();
-</script>{{end}}
+{{end}}

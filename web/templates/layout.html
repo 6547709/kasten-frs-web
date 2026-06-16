@@ -7,7 +7,7 @@
   <script src="/static/htmx.min.js"></script>
   <script src="/static/app.js"></script>
 </head>
-<body>
+<body data-page="{{.BodyTemplate}}">
 {{if eq .BodyTemplate "login_body"}}
   <div class="login-stage">
     {{template "login_body" .}}
