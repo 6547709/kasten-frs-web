@@ -15,9 +15,10 @@
 <div class="app">
 
   <header class="ribbon">
-    <span class="brand">Kasten <span class="accent">FRS</span> Web Helper<span class="version">v0.2.2</span></span>
+    <span class="brand">Kasten <span class="accent">FRS</span> Web Helper<span class="version">v0.3.0</span></span>
     <nav class="nav">
-      <a class="nav-item active" href="/sessions">Home</a>
+      <a class="nav-item {{if or (eq .BodyTemplate "sessions_body") (eq .BodyTemplate "browse_body")}}active{{end}}" href="/sessions">FRS</a>
+      <a class="nav-item {{if eq .BodyTemplate "wizard_body"}}active{{end}}" href="/wizard">Wizard</a>
     </nav>
     <span class="spacer"></span>
     <span class="status-pill"><span class="dot"></span>Connected</span>
@@ -27,8 +28,11 @@
   <aside class="sidebar">
     <div class="section">
       <div class="section-title">Browse</div>
-      <a class="item {{if eq .BodyTemplate "sessions_body"}}active{{end}}" href="/sessions">
+      <a class="item {{if or (eq .BodyTemplate "sessions_body") (eq .BodyTemplate "browse_body")}}active{{end}}" href="/sessions">
         <span class="ico">⊟</span><span class="lbl">FRS Sessions</span>
+      </a>
+      <a class="item {{if eq .BodyTemplate "wizard_body"}}active{{end}}" href="/wizard">
+        <span class="ico">✦</span><span class="lbl">Recovery Wizard</span>
       </a>
       <a class="item" href="/sessions"><span class="ico">↻</span><span class="lbl">Refresh</span></a>
       <a class="item" href="/logout"><span class="ico">⏻</span><span class="lbl">Sign Out</span></a>
@@ -42,6 +46,9 @@
     {{else if eq .BodyTemplate "browse_body"}}
       <div class="workarea-title">{{.FRS.Namespace}} / {{.FRS.Name}}</div>
       <div class="workarea-subtitle">FRS 路径 &nbsp;›&nbsp; {{.Path}}</div>
+    {{else if eq .BodyTemplate "wizard_body"}}
+      <div class="workarea-title">恢复向导</div>
+      <div class="workarea-subtitle">选 VM → 选还原点 → 选 volume → 创建 FRS</div>
     {{end}}
 
     {{if eq .BodyTemplate "browse_body"}}
@@ -57,18 +64,20 @@
     <div class="content">
       {{if eq .BodyTemplate "sessions_body"}}{{template "sessions_body" .}}{{end}}
       {{if eq .BodyTemplate "browse_body"}}{{template "browse_body" .}}{{end}}
+      {{if eq .BodyTemplate "wizard_body"}}{{template "wizard_body" .}}{{end}}
+      {{if eq .BodyTemplate "browse_preparing_body"}}{{template "browse_preparing_body" .}}{{end}}
       {{if eq .BodyTemplate "error_body"}}{{template "error_body" .}}{{end}}
     </div>
   </main>
 
   <footer class="statusbar">
     <span><span class="dot ok"></span>Authenticated</span>
-    {{if ne .BodyTemplate "sessions_body"}}
+    {{if eq .BodyTemplate "browse_body"}}
     <span>FRS: <strong>{{.FRS.Namespace}}/{{.FRS.Name}}</strong></span>
     <span>Path: <strong>{{.Path}}</strong></span>
     {{if .Entries}}<span>Items: <strong>{{len .Entries}}</strong></span>{{end}}
     {{end}}
-    <span class="right">Kasten FRS Web Helper · v0.2.2</span>
+    <span class="right">Kasten FRS Web Helper · v0.3.0</span>
   </footer>
 
 </div>
