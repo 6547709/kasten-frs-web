@@ -194,8 +194,21 @@
 
   // ---------- router ----------
 
-  const page = (document.body && document.body.getAttribute('data-page')) || '';
-  if (page === 'sessions_body') initSessions();
-  else if (page === 'wizard_body') initWizard();
-  else if (page === 'browse_preparing_body') initBrowsePreparing();
+  // app.js is loaded synchronously from <head>, before <body> has
+  // been parsed. Read data-page off body too early and we get '';
+  // every init branch would then no-op and the page would silently
+  // stop working (countdown never updates, VM clicks never fetch RP
+  // list, etc). Wait for DOMContentLoaded so data-page + the wizard
+  // panel nodes are in place when init runs.
+  function route() {
+    const page = (document.body && document.body.getAttribute('data-page')) || '';
+    if (page === 'sessions_body') initSessions();
+    else if (page === 'wizard_body') initWizard();
+    else if (page === 'browse_preparing_body') initBrowsePreparing();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', route);
+  } else {
+    route();
+  }
 })();
