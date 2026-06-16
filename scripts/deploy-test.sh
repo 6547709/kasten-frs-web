@@ -125,9 +125,15 @@ step1_preflight() {
 
     local frs_active
     frs_active=$(oc get frs "$FRS_NAME" -n "$FRS_NAMESPACE" \
-        -o jsonpath='{.status.conditions[?(@.type=="IsActive")].status}')
+        -o jsonpath='{.status.conditions[?(@.type=="IsActive")].status}' 2>/dev/null) || frs_active=""
     if [ "$frs_active" = "True" ]; then
         :
+    elif [ -z "$frs_active" ]; then
+        if [ "$ALLOW_FRS_INACTIVE" = "true" ]; then
+            warn "FRS $FRS_NAMESPACE/$FRS_NAME not found; continuing due to --allow-frs-inactive (v0.3.0+ wizard creates FRSes on demand, no pre-existing FRS required)"
+        else
+            die "FRS $FRS_NAMESPACE/$FRS_NAME not found (pass --allow-frs-inactive if running v0.3.0+ which creates FRSes via the wizard)"
+        fi
     elif [ "$ALLOW_FRS_INACTIVE" = "true" ]; then
         warn "FRS $FRS_NAMESPACE/$FRS_NAME IsActive != True (got '$frs_active'); continuing due to --allow-frs-inactive"
     else
@@ -135,13 +141,17 @@ step1_preflight() {
     fi
 
     local svc_count
-    svc_count=$(oc get svc -n "$NS" -l "k10.kasten.io/frs-name=$FRS_NAME" -o name | wc -l)
-    if [ "$svc_count" -ge 1 ]; then
-        :
-    elif [ "$ALLOW_FRS_INACTIVE" = "true" ]; then
-        warn "no Service in $NS for FRS $FRS_NAME; continuing due to --allow-frs-inactive"
+    if [ -n "$frs_active" ]; then
+        svc_count=$(oc get svc -n "$NS" -l "k10.kasten.io/frs-name=$FRS_NAME" -o name | wc -l)
+        if [ "$svc_count" -ge 1 ]; then
+            :
+        elif [ "$ALLOW_FRS_INACTIVE" = "true" ]; then
+            warn "no Service in $NS for FRS $FRS_NAME; continuing due to --allow-frs-inactive"
+        else
+            die "no Service in $NS for FRS $FRS_NAME"
+        fi
     else
-        die "no Service in $NS for FRS $FRS_NAME"
+        warn "skipping Service lookup in $NS for FRS $FRS_NAME (FRS not present)"
     fi
 
     local code token
@@ -345,7 +355,7 @@ step4_wait_probe() {
 }
 
 step5_netpol() {
-    step_start 5 "netpol: DNS, K8s API, FRS:2222"
+    step_start 5 "netpol: DNS, K8s API[, FRS:2222 if FRS exists]"
     # The helper image is built on ubi9-minimal and only installs
     # ca-certificates; nslookup and curl are NOT in the runtime PATH.
     # Use getent (glibc) for DNS resolution and bash's /dev/tcp for
@@ -364,20 +374,33 @@ step5_netpol() {
         timeout 3 bash -c "</dev/tcp/${dns_ip}/443" >>"$LOG_FILE" 2>&1 \
         || die "TCP connect to K8s API ${dns_ip}:443 failed"
 
+    # FRS:2222 is only meaningful when an FRS exists. v0.3.0+ doesn't
+    # require a pre-existing FRS (the wizard creates them on demand),
+    # so skip this check when FRS is missing.
     local frs_svc
     frs_svc=$(oc -n "$NS" get svc -l "k10.kasten.io/frs-name=$FRS_NAME" \
-        -o jsonpath='{.items[0].metadata.name}')
-    [ -n "$frs_svc" ] || die "FRS service for $FRS_NAME not found in $NS"
-
-    oc -n "$NS" exec "$POD" -- \
-        bash -c "timeout 3 bash -c '</dev/tcp/${frs_svc}.${NS}.svc.cluster.local/2222' && echo OK" \
-        >>"$LOG_FILE" 2>&1 \
-        || die "TCP connect to FRS :2222 failed (svc=$frs_svc)"
-    ok "netpol: DNS (${dns_ip}), API :443, FRS ${frs_svc}:2222 all reachable"
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || frs_svc=""
+    if [ -n "$frs_svc" ]; then
+        oc -n "$NS" exec "$POD" -- \
+            bash -c "timeout 3 bash -c '</dev/tcp/${frs_svc}.${NS}.svc.cluster.local/2222' && echo OK" \
+            >>"$LOG_FILE" 2>&1 \
+            || die "TCP connect to FRS :2222 failed (svc=$frs_svc)"
+        ok "netpol: DNS (${dns_ip}), API :443, FRS ${frs_svc}:2222 all reachable"
+    else
+        warn "no FRS service in $NS for $FRS_NAME; skipping FRS:2222 probe"
+        ok "netpol: DNS (${dns_ip}), API :443 reachable (FRS:2222 skipped, no FRS)"
+    fi
 }
 
 step6_e2e() {
-    step_start 6 "e2e: Route, login, /sessions, connect, /browse"
+    step_start 6 "e2e: login, /sessions, /wizard, /wizard/vms, /browse, /static"
+    # v0.3.0+ replaces the manual "k10tools creates FRS → list shows
+    # it → click connect → browse" flow with the wizard. The e2e
+    # below tests the wizard UI path and the static assets it
+    # depends on. End-to-end FRS creation via the wizard requires a
+    # real K10 RestorePoint in the cluster (not provided by this
+    # script), so we exercise the routes up to the validation/empty
+    # state and stop short of POST /wizard/create.
     ROUTE_HOST=$(oc -n "$NS" get route kasten-frs-web-helper \
         -o jsonpath='{.spec.host}')
     [ -n "$ROUTE_HOST" ] || die "Route kasten-frs-web-helper has no host"
@@ -385,10 +408,13 @@ step6_e2e() {
     COOKIE_JAR=$(mktemp -t kfrs-cookies-XXXXXX)
 
     log "BASE=$BASE"
+
+    # 1. /login renders.
     local code
     code=$(curl -sS -k -L -o /dev/null -w '%{http_code}' "$BASE/login")
     [ "$code" = "200" ] || die "/login returned $code (expected 200)"
 
+    # 2. POST /login → 303 + Set-Cookie kfrs_sid.
     local login_code
     login_code=$(curl -sS -k -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
         -o /dev/null -w '%{http_code}' \
@@ -399,39 +425,62 @@ step6_e2e() {
     grep -q 'kfrs_sid' "$COOKIE_JAR" \
         || die "no kfrs_sid cookie issued (see $COOKIE_JAR)"
 
+    # 3. /sessions renders the table (empty or with FRSes; either is fine).
     local sessions_html
     sessions_html=$(curl -sS -k -b "$COOKIE_JAR" "$BASE/sessions")
-    echo "$sessions_html" | grep -q "$FRS_NAME" \
-        || die "/sessions does not list $FRS_NAME"
     echo "$sessions_html" | grep -qiE '<table' \
         || die "/sessions HTML does not contain <table"
+    echo "$sessions_html" | grep -qE 'kfrs_sid|FRS Sessions|活跃' \
+        || die "/sessions HTML does not look like the sessions page"
 
-    local connect_code
-    # Two-step: POST without -L (capture the 303 + Location); then
-    # follow the redirect with an explicit GET. Mixing -L with -X POST
-    # confuses curl into re-POSTing the redirect target, which 405s
-    # against GET-only routes like /browse.
-    connect_code=$(curl -sS -k -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+    # 4. /wizard renders 3 panels (VM / RP / volume).
+    local wizard_html
+    wizard_html=$(curl -sS -k -b "$COOKIE_JAR" "$BASE/wizard")
+    echo "$wizard_html" | grep -q 'panel-vms' \
+        || die "/wizard HTML missing panel-vms"
+    echo "$wizard_html" | grep -q 'panel-rps' \
+        || die "/wizard HTML missing panel-rps"
+    echo "$wizard_html" | grep -q 'panel-vols' \
+        || die "/wizard HTML missing panel-vols"
+
+    # 5. /wizard/vms htmx fragment endpoint returns a list (empty or with VMs).
+    local vms_frag
+    vms_frag=$(curl -sS -k -b "$COOKIE_JAR" "$BASE/wizard/vms")
+    echo "$vms_frag" | grep -qiE 'vm-item|empty' \
+        || die "/wizard/vms fragment not as expected"
+
+    # 6. /wizard/create rejects an empty form (validation: 400).
+    local create_code
+    create_code=$(curl -sS -k -b "$COOKIE_JAR" \
         -o /dev/null -w '%{http_code}' -X POST \
-        "$BASE/sessions/${FRS_NAMESPACE}/${FRS_NAME}/connect")
-    [ "$connect_code" = "303" ] || die "POST /sessions/.../connect returned $connect_code (expected 303)"
+        --data-urlencode "vmNs=" --data-urlencode "vmName=" \
+        --data-urlencode "rpName=" \
+        "$BASE/wizard/create")
+    [ "$create_code" = "400" ] || die "POST /wizard/create (empty) returned $create_code (expected 400)"
 
-    local browse_html browse_code
-    browse_html=$(curl -sS -k -b "$COOKIE_JAR" \
-        -o /tmp/.kfrs-browse.html -w '%{http_code}' \
-        "$BASE/browse?frs=${FRS_NAMESPACE}/${FRS_NAME}&path=/")
-    browse_code=$browse_html
-    browse_html=$(cat /tmp/.kfrs-browse.html)
-    [ "$browse_code" = "200" ] || die "/browse returned $browse_code (expected 200)"
+    # 7. /browse?frs=badformat — 400 (parseFRSQuery rejects it).
+    local browse_code
+    browse_code=$(curl -sS -k -b "$COOKIE_JAR" \
+        -o /dev/null -w '%{http_code}' \
+        "$BASE/browse?frs=badformat")
+    [ "$browse_code" = "400" ] || die "/browse?frs=badformat returned $browse_code (expected 400)"
 
-    local browse_html
-    browse_html=$(curl -sS -k -L -b "$COOKIE_JAR" \
-        "$BASE/browse?frs=${FRS_NAMESPACE}/${FRS_NAME}&path=/")
-    echo "$browse_html" | grep -qiE '<tr|<td' \
-        || die "/browse HTML does not look like a directory listing"
-    echo "$browse_html" | grep -q "$FRS_NAME" \
-        || die "/browse does not mention $FRS_NAME"
-    ok "e2e passed: login → sessions → connect → browse all 200/303"
+    # 8. Static assets (htmx + theme) are served.
+    local htmx_code theme_code
+    htmx_code=$(curl -sS -k -o /dev/null -w '%{http_code}' "$BASE/static/htmx.min.js")
+    [ "$htmx_code" = "200" ] || die "/static/htmx.min.js returned $htmx_code (expected 200)"
+    theme_code=$(curl -sS -k -o /dev/null -w '%{http_code}' "$BASE/static/veeam-theme.css")
+    [ "$theme_code" = "200" ] || die "/static/veeam-theme.css returned $theme_code (expected 200)"
+
+    # 9. /browse?frs=ns/nonexistent — graceful 502 (apiserver NotFound
+    #    rendered through renderError, not a 500 panic).
+    local browse404_code
+    browse404_code=$(curl -sS -k -b "$COOKIE_JAR" \
+        -o /dev/null -w '%{http_code}' \
+        "$BASE/browse?frs=default/nonexistent-frs")
+    [ "$browse404_code" = "502" ] || die "/browse?frs=default/nonexistent-frs returned $browse404_code (expected 502)"
+
+    ok "e2e passed: login → sessions → wizard (3 panels + htmx fragment) → validation 400 → browse 400/502 → static assets 200"
 }
 
 step7_summary() {
@@ -441,7 +490,7 @@ step7_summary() {
 image:    ${IMAGE_REPO}:${IMAGE_TAG}
 pod:      ${NS}/${POD}
 route:    ${BASE}
-frs:      ${FRS_NAMESPACE}/${FRS_NAME}
+frs:      ${FRS_NAMESPACE}/${FRS_NAME:-"(none — wizard creates on demand)"}
 log:      ${LOG_FILE}
 overall:  PASS
 SUMMARY
