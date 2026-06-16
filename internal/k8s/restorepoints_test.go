@@ -212,6 +212,29 @@ func TestGetRestorePointDetails_ParsePVCs(t *testing.T) {
 // This test guards against the schema being missed again — when the
 // old top-level-only code was running, this same payload would parse
 // to zero artifacts and the wizard would show "这个还原点没有 PVC artifacts".
+func TestHumanStorageQuantity(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"100Gi", "100Gi"},               // already suffixed: pass-through
+		{"10Mi", "10Mi"},
+		{"107374182400", "100Gi"},         // 100 GiB
+		{"1073741824", "1Gi"},
+		{"1048576", "1Mi"},
+		{"1024", "1Ki"},
+		{"1099511627776", "1Ti"},
+		{"512", "512"},                    // not a clean multiple: pass-through as integer
+		{"abc", "abc"},                    // garbage: pass-through unchanged
+	}
+	for _, c := range cases {
+		got := humanStorageQuantity(c.in)
+		if got != c.want {
+			t.Errorf("humanStorageQuantity(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestGetRestorePointDetails_RealSchema(t *testing.T) {
 	body := []byte(`{
 		"status": {

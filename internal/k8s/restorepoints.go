@@ -233,7 +233,9 @@ func parseDetailsPVCs(body []byte) ([]VolumeArtifact, error) {
 						}
 					}
 					if size == "" {
-						size = pvcSize
+						size = humanStorageQuantity(pvcSize)
+					} else {
+						size = humanStorageQuantity(size)
 					}
 					out = append(out, VolumeArtifact{
 						PVCName:      name,
@@ -246,4 +248,60 @@ func parseDetailsPVCs(body []byte) ([]VolumeArtifact, error) {
 		}
 	}
 	return out, nil
+}
+
+// humanStorageQuantity normalises a K8s storage quantity to a
+// human-friendly string the DataVolume spec will accept. K10's RP
+// artifact often returns raw bytes ("107374182400"); the DV
+// resources.requests.storage field requires a suffix like "Gi".
+// If the input already has a suffix, return it unchanged.
+func humanStorageQuantity(s string) string {
+	if s == "" {
+		return s
+	}
+	if !isAllDigits(s) {
+		return s
+	}
+	const (
+		Ki = 1 << 10
+		Mi = 1 << 20
+		Gi = 1 << 30
+		Ti = 1 << 40
+	)
+	n := parseUint(s)
+	switch {
+	case n >= Ti && n%Ti == 0:
+		return fmt.Sprintf("%dTi", n/Ti)
+	case n >= Gi && n%Gi == 0:
+		return fmt.Sprintf("%dGi", n/Gi)
+	case n >= Mi && n%Mi == 0:
+		return fmt.Sprintf("%dMi", n/Mi)
+	case n >= Ki && n%Ki == 0:
+		return fmt.Sprintf("%dKi", n/Ki)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseUint(s string) uint64 {
+	var n uint64
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			break
+		}
+		n = n*10 + uint64(c-'0')
+	}
+	return n
 }
