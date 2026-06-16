@@ -49,32 +49,55 @@ func (wm *watchMap) del(ref k8s.FRSRef) {
 	delete(wm.m, ref)
 }
 
-// handleWizardPage renders the wizard landing page: VM picker.
-// The wizard_body template lives in web/templates/wizard.html
-// (added by Task 9). Until that lands, ExecuteTemplate will return
-// an error which we log and otherwise ignore — the rest of the
-// wizard flow (HTMX fragments, /wizard/create) is self-contained.
+// handleWizardPage renders the wizard landing page: namespace picker
+// + VM picker. VM list is initially empty until the user picks a
+// namespace; the empty state is more honest than dumping every VM
+// across every namespace, and also disambiguates same-named VMs
+// that exist in different namespaces.
 func (s *Server) handleWizardPage(w http.ResponseWriter, r *http.Request) {
-	vms, err := s.frsListVMs(r.Context())
+	nsList, err := s.frsListVMNamespaces(r.Context())
 	if err != nil {
-		s.renderError(w, http.StatusBadGateway, "VM 列表拉取失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Namespace 列表拉取失败", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
 		"Title":        "恢复向导",
 		"BodyTemplate": "wizard_body",
-		"VMs":          vms,
+		"NSList":       nsList,
 		"User":         s.auth.Username,
+		"Version":      s.version,
 	}); err != nil {
 		slog.Error("render wizard", "err", err)
 	}
 }
 
-// handleWizardVMs re-renders just the VM <select> fragment.
-// HTMX targets this on first page load and after a "refresh" click.
+// handleWizardNamespaces re-renders just the namespace <select> fragment.
+func (s *Server) handleWizardNamespaces(w http.ResponseWriter, r *http.Request) {
+	nsList, err := s.frsListVMNamespaces(r.Context())
+	if err != nil {
+		s.renderError(w, http.StatusBadGateway, "Namespace 列表拉取失败", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := pageTemplates.ExecuteTemplate(w, "wizard_namespaces_fragment", map[string]any{
+		"NSList": nsList,
+	}); err != nil {
+		slog.Error("render wizard namespaces", "err", err)
+	}
+}
+
+// handleWizardVMs re-renders just the VM <ul> fragment. Optional
+// query param ns= limits the listing to a single namespace; empty
+// ns lists VMs across all namespaces.
 func (s *Server) handleWizardVMs(w http.ResponseWriter, r *http.Request) {
-	vms, err := s.frsListVMs(r.Context())
+	var vms []k8s.VM
+	var err error
+	if ns := r.URL.Query().Get("ns"); ns != "" {
+		vms, err = s.frs.ListVMs(r.Context(), []string{ns})
+	} else {
+		vms, err = s.frsListVMs(r.Context())
+	}
 	if err != nil {
 		s.renderError(w, http.StatusBadGateway, "VM 列表拉取失败", err.Error())
 		return

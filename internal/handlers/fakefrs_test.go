@@ -55,6 +55,9 @@ func (f *fakeFRS) GetFRS(_ context.Context, ref k8s.FRSRef) (k8s.FRSView, error)
 func (f *fakeFRS) ListVMs(_ context.Context, _ []string) ([]k8s.VM, error) {
 	return nil, nil
 }
+func (f *fakeFRS) ListVMNamespaces(_ context.Context) ([]string, error) {
+	return nil, nil
+}
 func (f *fakeFRS) ListRestorePoints(_ context.Context, _, _ string) ([]k8s.RestorePoint, error) {
 	return nil, nil
 }

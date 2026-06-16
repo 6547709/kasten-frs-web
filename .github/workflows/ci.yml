@@ -73,6 +73,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamp the running binary with the same tag the image is
+          # pushed under, so the UI footer reflects what `oc describe
+          # pod` shows. github.ref_name on a vX.Y.Z push is "vX.Y.Z";
+          # the binary prints that verbatim, matching the ghcr tag.
+          build-args: VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true

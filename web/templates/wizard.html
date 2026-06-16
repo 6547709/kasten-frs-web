@@ -1,13 +1,21 @@
 {{define "wizard_body"}}<div class="wizard-stage">
   <div class="workarea-title">恢复向导</div>
-  <div class="workarea-subtitle">选 VM → 选还原点 → 选 volume → 创建 FRS</div>
+  <div class="workarea-subtitle">选 namespace → 选 VM → 选还原点 → 选 volume → 创建 FRS</div>
+
+  <section class="wizard-panel wizard-panel-ns" id="panel-ns">
+    <div class="panel-title">第 0 步：选 namespace（区分同名 VM）</div>
+    <select id="ns-select" name="ns">
+      <option value="">-- 全部 namespace --</option>
+      {{template "wizard_namespaces_fragment" .}}
+    </select>
+  </section>
 
   <div class="wizard-grid">
     <section class="wizard-panel" id="panel-vms">
       <div class="panel-title">第 1 步：选虚拟机</div>
       <input type="search" id="vm-filter" placeholder="搜索 VM 名…" autocomplete="off">
       <ul class="vm-list" id="vm-list">
-        {{template "wizard_vms_fragment" .}}
+        <li class="empty">先在第 0 步选一个 namespace。</li>
       </ul>
     </section>
 
@@ -40,6 +48,9 @@
   const $ = (s, r=document) => r.querySelector(s);
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 
+  // initial VM list = all namespaces (so the user sees something on first load)
+  htmx.ajax('GET', '/wizard/vms', {target:'#vm-list', swap:'innerHTML'});
+
   const filter = $('#vm-filter');
   if (filter) {
     filter.addEventListener('input', () => {
@@ -48,6 +59,21 @@
         const name = li.dataset.vmName || '';
         li.style.display = name.toLowerCase().includes(q) ? '' : 'none';
       });
+    });
+  }
+
+  const nsSel = $('#ns-select');
+  if (nsSel) {
+    nsSel.addEventListener('change', () => {
+      const ns = nsSel.value;
+      // clear dependent state
+      $('#vm-ns').value = ''; $('#vm-name').value = '';
+      $('#rp-name').value = ''; $('#pvc-fields').innerHTML = '';
+      $('#wizard-submit').disabled = true;
+      $('#rp-list').innerHTML = '<p class="empty">从左侧选一个 VM</p>';
+      $('#vol-list').innerHTML = '<p class="empty">从中间选一个还原点</p>';
+      const url = ns ? '/wizard/vms?ns=' + encodeURIComponent(ns) : '/wizard/vms';
+      htmx.ajax('GET', url, {target:'#vm-list', swap:'innerHTML'});
     });
   }
 
@@ -65,7 +91,7 @@
 
   document.body.addEventListener('htmx:afterRequest', e => {
     if (e.target.id === 'rp-list') {
-      $('#rp-list').addEventListener('click', e2 => {
+      const handler = e2 => {
         const li = e2.target.closest('li');
         if (!li) return;
         $$('#rp-list li').forEach(x => x.classList.remove('selected'));
@@ -73,7 +99,10 @@
         const name = li.dataset.rpName;
         $('#rp-name').value = name;
         htmx.ajax('GET', '/wizard/rps/'+encodeURIComponent(li.dataset.rpNs)+'/'+encodeURIComponent(name)+'/details', {target:'#vol-list', swap:'innerHTML'});
-      }, {once: true});
+      };
+      // Use a named handler so it survives repeat rp-list swaps
+      $('#rp-list')._rpClick = handler;
+      $('#rp-list').addEventListener('click', handler);
     }
     if (e.target.id === 'vol-list') {
       const any = $$('#vol-list input[name=pvcNames]').length > 0;
@@ -88,6 +117,11 @@
   });
 })();
 </script>{{end}}
+
+{{define "wizard_namespaces_fragment"}}
+{{range .NSList}}
+<option value="{{.}}">{{.}}</option>
+{{end}}{{end}}
 
 {{define "wizard_vms_fragment"}}
 {{range .VMs}}

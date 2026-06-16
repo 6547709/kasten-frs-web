@@ -1,6 +1,10 @@
 GO ?= go
 BIN := bin/helper
-LDFLAGS := -s -w
+# Version is injected at build time; pass VERSION=vX.Y.Z to override
+# the default "dev". Surfaced in the UI footer so the running binary
+# is identifiable without checking the image tag.
+VERSION ?= dev
+LDFLAGS := -s -w -X 'main.version=$(VERSION)'
 
 .PHONY: build test test-race test-cover lint fmt vet run clean fetch-htmx
 

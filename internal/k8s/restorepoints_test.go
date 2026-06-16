@@ -49,7 +49,9 @@ func TestListVMs_DedupAndSort(t *testing.T) {
 		makeRP("default", "rp1", "web-01", "virtualMachine", "Bound", now.Add(-1*time.Hour)),
 		makeRP("default", "rp2", "web-01", "virtualMachine", "Bound", now.Add(-30*time.Minute)),
 		makeRP("default", "rp3", "db-01", "virtualMachine", "Bound", now.Add(-2*time.Hour)),
+		// non-VM RPs are ignored regardless of state
 		makeRP("default", "rp4", "web-01", "namespace", "Bound", now),
+		// Failed state no longer filters: user chooses namespace first
 		makeRP("default", "rp5", "web-01", "virtualMachine", "Failed", now),
 	}
 	c := &Client{dyn: newTestDynClient(rps...)}
@@ -60,14 +62,69 @@ func TestListVMs_DedupAndSort(t *testing.T) {
 	if len(vms) != 2 {
 		t.Fatalf("got %d vms, want 2", len(vms))
 	}
+	// both VMs are in namespace "default"; web-01 has the latest RP (now)
 	if vms[0].AppName != "web-01" || vms[1].AppName != "db-01" {
 		t.Errorf("sort wrong: %+v", vms)
 	}
-	if vms[0].RPCount != 2 {
-		t.Errorf("web-01 RPCount = %d, want 2", vms[0].RPCount)
+	if vms[0].RPCount != 3 {
+		t.Errorf("web-01 RPCount = %d, want 3", vms[0].RPCount)
 	}
 	if vms[1].RPCount != 1 {
 		t.Errorf("db-01 RPCount = %d, want 1", vms[1].RPCount)
+	}
+}
+
+func TestListVMs_NamespaceFilterAndCrossNS(t *testing.T) {
+	// Same app name in two namespaces must surface as two separate VMs
+	// when no filter is applied, and be reduced to one when filtered.
+	now := time.Now()
+	rps := []runtime.Object{
+		makeRP("ns-a", "rp-a", "web01", "virtualMachine", "Bound", now),
+		makeRP("ns-b", "rp-b", "web01", "virtualMachine", "Bound", now.Add(-1*time.Hour)),
+		makeRP("ns-b", "rp-c", "db01", "virtualMachine", "Bound", now),
+	}
+	c := &Client{dyn: newTestDynClient(rps...)}
+	all, err := c.ListVMs(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("cluster-wide: got %d, want 3", len(all))
+	}
+	bOnly, err := c.ListVMs(context.Background(), []string{"ns-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bOnly) != 2 {
+		t.Fatalf("ns-b only: got %d, want 2", len(bOnly))
+	}
+	for _, v := range bOnly {
+		if v.AppNamespace != "ns-b" {
+			t.Errorf("filter leaked: %+v", v)
+		}
+	}
+}
+
+func TestListVMNamespaces(t *testing.T) {
+	now := time.Now()
+	rps := []runtime.Object{
+		makeRP("ns-a", "rp1", "web01", "virtualMachine", "Bound", now),
+		makeRP("ns-b", "rp2", "db01", "virtualMachine", "Bound", now),
+		makeRP("ns-a", "rp3", "cfg01", "namespace", "Bound", now), // ignored: not a VM
+	}
+	c := &Client{dyn: newTestDynClient(rps...)}
+	got, err := c.ListVMNamespaces(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ns-a", "ns-b"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("[%d] got %s want %s", i, got[i], w)
+		}
 	}
 }
 
@@ -92,6 +149,44 @@ func TestListRestorePoints_OrderByCreatedDesc(t *testing.T) {
 		if got[i].Name != w {
 			t.Errorf("[%d] got %s want %s", i, got[i].Name, w)
 		}
+	}
+}
+
+func TestListVMs_AcceptsMissingStateField(t *testing.T) {
+	// K10 in some deployments does not populate status.state at all
+	// (only scheduledTime + sizes). A RP with VM labels + a size must
+	// still be counted as an active VM; previously isActiveState("")
+	// dropped it and the UI showed no VMs at all.
+	now := time.Now()
+	rps := []runtime.Object{
+		makeRP("default", "rp-no-state", "rocky-9-nginx", "virtualMachine", "", now),
+	}
+	c := &Client{dyn: newTestDynClient(rps...)}
+	vms, err := c.ListVMs(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vms) != 1 {
+		t.Fatalf("got %d vms, want 1 (state-less RP must count)", len(vms))
+	}
+	if vms[0].AppName != "rocky-9-nginx" || vms[0].RPCount != 1 {
+		t.Errorf("vm = %+v", vms[0])
+	}
+}
+
+func TestListRestorePoints_AcceptsMissingStateField(t *testing.T) {
+	now := time.Now()
+	rps := []runtime.Object{
+		makeRP("default", "rp1", "rocky-9-nginx", "virtualMachine", "", now.Add(-1*time.Hour)),
+		makeRP("default", "rp2", "rocky-9-nginx", "virtualMachine", "", now),
+	}
+	c := &Client{dyn: newTestDynClient(rps...)}
+	got, err := c.ListRestorePoints(context.Background(), "default", "rocky-9-nginx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d RPs, want 2 (state-less RPs must be listed)", len(got))
 	}
 }
 

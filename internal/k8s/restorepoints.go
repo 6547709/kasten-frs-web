@@ -41,8 +41,9 @@ type VolumeArtifact struct {
 	Size    string
 }
 
-// ListVMs returns all VMs discovered via appType=virtualMachine RPs.
-// namespaces is an optional cluster-wide filter (nil = all).
+// ListVMs returns all VMs discovered via appType=virtualMachine RPs,
+// grouped by (appNamespace, appName).
+// namespaces is an optional allow-list (nil = all namespaces).
 func (c *Client) ListVMs(ctx context.Context, namespaces []string) ([]VM, error) {
 	u, err := c.dyn.Resource(RestorePointGVR).Namespace("").List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -64,12 +65,6 @@ func (c *Client) ListVMs(ctx context.Context, namespaces []string) ([]VM, error)
 			continue
 		}
 		appName := it.GetLabels()["k10.kasten.io/appName"]
-		state, _, _ := unstructured.NestedString(it.Object, "status", "state")
-		// VMs only count healthy RPs; Failed/empty states indicate the app
-		// cannot be recovered from this snapshot.
-		if !isActiveState(state) {
-			continue
-		}
 		k := key{appName, ns}
 		v, ok := seen[k]
 		if !ok {
@@ -88,8 +83,42 @@ func (c *Client) ListVMs(ctx context.Context, namespaces []string) ([]VM, error)
 		out = append(out, *v)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].AppNamespace != out[j].AppNamespace {
+			return out[i].AppNamespace < out[j].AppNamespace
+		}
+		if out[i].LastRPTime.Equal(out[j].LastRPTime) {
+			return out[i].AppName < out[j].AppName
+		}
 		return out[i].LastRPTime.After(out[j].LastRPTime)
 	})
+	return out, nil
+}
+
+// ListVMNamespaces returns the distinct set of namespaces that have at
+// least one appType=virtualMachine RestorePoint. Used to populate the
+// namespace selector on the wizard's first step.
+func (c *Client) ListVMNamespaces(ctx context.Context) ([]string, error) {
+	u, err := c.dyn.Resource(RestorePointGVR).Namespace("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list restorepoints: %w", err)
+	}
+	set := map[string]struct{}{}
+	for i := range u.Items {
+		it := &u.Items[i]
+		if it.GetLabels()["k10.kasten.io/appType"] != "virtualMachine" {
+			continue
+		}
+		ns := it.GetLabels()["k10.kasten.io/appNamespace"]
+		if ns == "" {
+			continue
+		}
+		set[ns] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	sort.Strings(out)
 	return out, nil
 }
 

@@ -73,9 +73,13 @@ func (c *Client) ListActiveFRS(ctx context.Context, namespaces []string) ([]FRSV
 	return out, nil
 }
 
+// isActiveState reports whether s is a non-terminal FRS state.
+// Empty state is treated as in-progress (K10 in some deployments does
+// not populate status.state early; the FRS is still observable and
+// expirable via the watch loop).
 func isActiveState(s string) bool {
 	switch s {
-	case "Failed", "Succeeded", "Terminated", "":
+	case "Failed", "Succeeded", "Terminated":
 		return false
 	}
 	return true

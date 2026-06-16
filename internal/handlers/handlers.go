@@ -104,6 +104,7 @@ type FRSProvider interface {
 	ListActiveFRS(ctx context.Context, namespaces []string) ([]k8s.FRSView, error)
 	GetFRS(ctx context.Context, ref k8s.FRSRef) (k8s.FRSView, error)
 	ListVMs(ctx context.Context, namespaces []string) ([]k8s.VM, error)
+	ListVMNamespaces(ctx context.Context) ([]string, error)
 	ListRestorePoints(ctx context.Context, ns, appName string) ([]k8s.RestorePoint, error)
 	GetRestorePointDetails(ctx context.Context, ns, name string) ([]k8s.VolumeArtifact, error)
 	CreateFRS(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error)
@@ -121,6 +122,7 @@ type Server struct {
 	pubKeyPEM   string
 	frsPort     int
 	nsWhitelist []string
+	version     string
 	logger      *slog.Logger
 	// watches tracks in-flight FRSes created by the wizard
 	// (Task 8). Keyed by FRSRef; entry is set to "Pending" on
@@ -134,10 +136,12 @@ type Server struct {
 	frsTimeout time.Duration
 }
 
-// New builds a Server.
+// New builds a Server. version is shown in the UI footer; pass the
+// same string as the image tag (e.g. "v0.3.1") so operators can see
+// at a glance which release is running.
 func New(a *auth.Authenticator, pool *sftpclient.Pool, frs FRSProvider,
 	username, pubKeyPEM string, frsPort int, nsWhitelist []string,
-	frsTimeout time.Duration) *Server {
+	frsTimeout time.Duration, version string) *Server {
 	s := &Server{
 		auth:        a,
 		pool:        pool,
@@ -147,6 +151,7 @@ func New(a *auth.Authenticator, pool *sftpclient.Pool, frs FRSProvider,
 		pubKeyPEM:   pubKeyPEM,
 		frsPort:     frsPort,
 		nsWhitelist: nsWhitelist,
+		version:     version,
 		logger:      slog.Default(),
 		watches:     &watchMap{m: make(map[k8s.FRSRef]*watchState)},
 		frsTimeout:  frsTimeout,
@@ -190,8 +195,9 @@ func (s *Server) routes() {
 	authed.HandleFunc("GET /download", s.handleDownload)
 	authed.HandleFunc("GET /download-zip", s.handleDownloadZip)
 
-	// Wizard (Task 8): VM picker → RP picker → Volume picker → Create FRS.
+	// Wizard (Task 8): namespace picker → VM picker → RP picker → Volume picker → Create FRS.
 	authed.HandleFunc("GET /wizard", s.handleWizardPage)
+	authed.HandleFunc("GET /wizard/namespaces", s.handleWizardNamespaces)
 	authed.HandleFunc("GET /wizard/vms", s.handleWizardVMs)
 	authed.HandleFunc("GET /wizard/vms/{ns}/{name}/restorepoints", s.handleWizardRPs)
 	authed.HandleFunc("GET /wizard/rps/{ns}/{name}/details", s.handleWizardVolumes)
@@ -210,6 +216,7 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, _ *http.Request) {
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
 		"Title":        "登录",
 		"BodyTemplate": "login_body",
+		"Version":      s.version,
 	}); err != nil {
 		slog.Error("render login", "err", err)
 	}
@@ -235,6 +242,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		"BodyTemplate": "sessions_body",
 		"FRS":          frsList,
 		"User":         s.auth.Username,
+		"Version":      s.version,
 	}); err != nil {
 		slog.Error("render sessions", "err", err)
 	}
@@ -332,6 +340,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		"Path":         path,
 		"Entries":      entries,
 		"User":         s.auth.Username,
+		"Version":      s.version,
 	}); err != nil {
 		slog.Error("render browse", "err", err)
 	}
@@ -346,6 +355,7 @@ func (s *Server) renderPreparing(w http.ResponseWriter, ref k8s.FRSRef, ws *watc
 		"State":        ws.State,
 		"Error":        errString(ws.Err),
 		"User":         s.auth.Username,
+		"Version":      s.version,
 	}); err != nil {
 		slog.Error("render preparing", "err", err)
 	}
@@ -598,6 +608,7 @@ func (s *Server) renderError(w http.ResponseWriter, status int, title, msg strin
 		"BodyTemplate": "error_body",
 		"Message":      msg,
 		"User":         s.auth.Username,
+		"Version":      s.version,
 	}); err != nil {
 		slog.Error("render error page", "title", title, "err", err)
 	}
@@ -615,6 +626,10 @@ func (s *Server) renderError(w http.ResponseWriter, status int, title, msg strin
 
 func (s *Server) frsListVMs(ctx context.Context) ([]k8s.VM, error) {
 	return s.frs.ListVMs(ctx, s.nsWhitelist)
+}
+
+func (s *Server) frsListVMNamespaces(ctx context.Context) ([]string, error) {
+	return s.frs.ListVMNamespaces(ctx)
 }
 
 func (s *Server) frsListRPs(ctx context.Context, ns, appName string) ([]k8s.RestorePoint, error) {

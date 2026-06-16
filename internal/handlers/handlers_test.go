@@ -33,7 +33,7 @@ func newTestServer(t *testing.T) *Server {
 	)
 	srv := New(a, pool, FakeFRSProvider(t, ts.Addr().String(), hostKeySig),
 		"root", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTKEY test@local", 2222, []string{ts.Addr().String()},
-		30*time.Second)
+		30*time.Second, "test")
 	return srv
 }
 

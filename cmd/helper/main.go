@@ -23,6 +23,18 @@ import (
 	"github.com/liguoqiang/kasten-frs-web/internal/sftpclient"
 )
 
+// version is the build version surfaced in the UI footer. Three
+// precedence levels:
+//   1. ldflags -X main.version=... (set at image build time by CI)
+//   2. VERSION env var (lets operators override at pod deploy time)
+//   3. "dev" (fallback for `go run` / local builds)
+var version = func() string {
+	if v := os.Getenv("VERSION"); v != "" {
+		return v
+	}
+	return "dev"
+}()
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
@@ -64,7 +76,7 @@ func run() error {
 		auth.NewSessionStore(cfg.CookieSecret, cfg.SessionTTL), "kfrs_sid")
 	registry := metrics.NewRegistry()
 
-	hs := handlers.New(sessions, pool, kc, cfg.FRSDefaultUsername, string(km.PubKeyPEM), cfg.FRSPort, cfg.FRSNamespaceWhitelist, cfg.FRSWaitTimeout)
+	hs := handlers.New(sessions, pool, kc, cfg.FRSDefaultUsername, string(km.PubKeyPEM), cfg.FRSPort, cfg.FRSNamespaceWhitelist, cfg.FRSWaitTimeout, version)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", registry.Handler())
 	mux.Handle("/", server.SecurityHeaders(server.Recoverer(hs.Router())))
@@ -81,6 +93,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger.Info("helper starting", "addr", l.Addr().String())
+	logger.Info("helper starting", "addr", l.Addr().String(), "version", version)
 	return server.Run(ctx, srv, l)
 }

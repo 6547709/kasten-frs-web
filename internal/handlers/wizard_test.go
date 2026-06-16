@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -16,6 +17,7 @@ import (
 // stubProvider is a minimal FRSProvider for wizard tests.
 type stubProvider struct {
 	vms      []k8s.VM
+	nss      []string
 	rps      []k8s.RestorePoint
 	vols     []k8s.VolumeArtifact
 	createFn func(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error)
@@ -29,6 +31,9 @@ func (s *stubProvider) GetFRS(_ context.Context, _ k8s.FRSRef) (k8s.FRSView, err
 }
 func (s *stubProvider) ListVMs(_ context.Context, _ []string) ([]k8s.VM, error) {
 	return s.vms, nil
+}
+func (s *stubProvider) ListVMNamespaces(_ context.Context) ([]string, error) {
+	return s.nss, nil
 }
 func (s *stubProvider) ListRestorePoints(_ context.Context, _, _ string) ([]k8s.RestorePoint, error) {
 	return s.rps, nil
@@ -52,23 +57,33 @@ func newWizardTestServer(t *testing.T, stub *stubProvider) *Server {
 	a := auth.NewAuthenticator("u", "p",
 		auth.NewSessionStore([]byte("0123456789abcdef0123456789abcdef"), time.Hour), "kfrs_sid")
 	pool := sftpclient.NewPool(nil, time.Hour)
-	return New(a, pool, stub, "root", "ssh-ed25519 AAAA...", 2222, nil, 30*time.Second)
+	return New(a, pool, stub, "root", "ssh-ed25519 AAAA...", 2222, nil, 30*time.Second, "test")
 }
 
 func TestHandleWizardPage_Renders(t *testing.T) {
-	stub := &stubProvider{vms: []k8s.VM{{AppName: "web-01", AppNamespace: "default", RPCount: 3}}}
+	stub := &stubProvider{
+		nss: []string{"default", "kasten-io"},
+		vms: []k8s.VM{{AppName: "web-01", AppNamespace: "default", RPCount: 3}},
+	}
 	s := newWizardTestServer(t, stub)
 	r := httptest.NewRequest("GET", "/wizard", nil)
 	w := httptest.NewRecorder()
 	s.handleWizardPage(w, r)
-	// Either the template renders (200) or it errors (500) because templates
-	// don't exist yet. Either way, we should NOT panic.
-	if w.Code != 200 && w.Code != 500 {
-		body := w.Body.String()
-		if len(body) > 200 {
-			body = body[:200]
-		}
-		t.Errorf("unexpected code %d, body=%s", w.Code, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	// Namespace selector must list all discovered namespaces plus the
+	// "all" sentinel so cross-ns filtering is one click away.
+	if !strings.Contains(body, `value="default"`) {
+		t.Errorf("namespace option missing in body: %s", body)
+	}
+	if !strings.Contains(body, "-- 全部 namespace --") {
+		t.Errorf("all-namespace sentinel missing in body: %s", body)
+	}
+	// Version should be wired through to the footer.
+	if !strings.Contains(body, "vtest") && !strings.Contains(body, "test") {
+		t.Errorf("version not rendered in footer: %s", body)
 	}
 }
 
