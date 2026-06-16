@@ -2,6 +2,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"runtime/debug"
 )
@@ -27,7 +28,7 @@ func Recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				_ = debug.Stack()
+				fmt.Printf("PANIC %s %s: %v\n%s\n", r.Method, r.URL.Path, rec, debug.Stack())
 				http.Error(w, "internal error", http.StatusInternalServerError)
 			}
 		}()
