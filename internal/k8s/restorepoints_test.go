@@ -205,3 +205,35 @@ func TestGetRestorePointDetails_ParsePVCs(t *testing.T) {
 		t.Fatalf("got %+v", arts)
 	}
 }
+
+// Real K10 returns the artifact list under status.restorePointDetails
+// (not at the top level) and identifies each artifact by the GVR's
+// resource (e.g. "persistentvolumeclaims") rather than a flat kind.
+// This test guards against the schema being missed again — when the
+// old top-level-only code was running, this same payload would parse
+// to zero artifacts and the wizard would show "这个还原点没有 PVC artifacts".
+func TestGetRestorePointDetails_RealSchema(t *testing.T) {
+	body := []byte(`{
+		"status": {
+			"restorePointDetails": {
+				"artifacts": [
+					{"meta": {"spec": {"resource": "virtualmachines.virtualmachine.kubevirt.io", "name": "rocky-9-nginx"}}, "source": {"kind": "virtualmachine"}},
+					{"meta": {"spec": {"resource": "persistentvolumeclaims", "name": "rocky-9-nginx-volume", "namespace": "default"}}, "occupiedSize": "100Gi", "source": {"kind": "virtualmachine"}}
+				]
+			}
+		}
+	}`)
+	arts, err := parseDetailsPVCs(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(arts) != 1 {
+		t.Fatalf("got %d, want 1 (only the PVC)", len(arts))
+	}
+	if arts[0].PVCName != "rocky-9-nginx-volume" {
+		t.Errorf("pvc name = %q, want rocky-9-nginx-volume", arts[0].PVCName)
+	}
+	if arts[0].Size != "100Gi" {
+		t.Errorf("size = %q, want 100Gi", arts[0].Size)
+	}
+}

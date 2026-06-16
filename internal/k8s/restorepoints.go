@@ -163,23 +163,55 @@ func (c *Client) GetRestorePointDetails(ctx context.Context, ns, name string) ([
 	return parseDetailsPVCs(body)
 }
 
-// parseDetailsPVCs extracts PVC artifacts from the RestorePoint /details JSON body.
+// parseDetailsPVCs extracts PVC artifacts from the RestorePoint /details
+// JSON body. K10's actual schema nests the artifact list at
+// status.restorePointDetails.artifacts, and identifies each artifact by
+// resource group (e.g. "persistentvolumeclaims") rather than by a flat
+// "kind" field. Earlier code looked at the top-level `artifacts` and
+// found nothing on real clusters.
 func parseDetailsPVCs(body []byte) ([]VolumeArtifact, error) {
-	var raw struct {
-		Artifacts []map[string]any `json:"artifacts"`
+	var doc struct {
+		Status struct {
+			RestorePointDetails struct {
+				Artifacts []map[string]any `json:"artifacts"`
+			} `json:"restorePointDetails"`
+		} `json:"status"`
 	}
-	if err := json.Unmarshal(body, &raw); err != nil {
+	if err := json.Unmarshal(body, &doc); err != nil {
 		return nil, fmt.Errorf("unmarshal details: %w", err)
 	}
+	artifacts := doc.Status.RestorePointDetails.Artifacts
+	if len(artifacts) == 0 {
+		// Fall back to a top-level artifacts array in case the deployment
+		// uses a slightly different shape (e.g. older K10 or a custom
+		// mirror).
+		var alt struct {
+			Artifacts []map[string]any `json:"artifacts"`
+		}
+		if err := json.Unmarshal(body, &alt); err == nil {
+			artifacts = alt.Artifacts
+		}
+	}
 	var out []VolumeArtifact
-	for _, m := range raw.Artifacts {
-		kind, _ := m["kind"].(string)
-		if kind != "PersistentVolumeClaim" {
+	for _, m := range artifacts {
+		// Two ways an artifact can identify itself as a PVC:
+		//  1. flat:   {"kind":"PersistentVolumeClaim",...}
+		//  2. nested: {"meta":{"spec":{"resource":"persistentvolumeclaims",...}},...}
+		if kind, _ := m["kind"].(string); kind == "PersistentVolumeClaim" {
+			pvc, _ := m["name"].(string)
+			size, _ := m["occupiedSize"].(string)
+			out = append(out, VolumeArtifact{PVCName: pvc, Size: size})
 			continue
 		}
-		pvc, _ := m["name"].(string)
-		size, _ := m["occupiedSize"].(string)
-		out = append(out, VolumeArtifact{PVCName: pvc, Size: size})
+		if meta, ok := m["meta"].(map[string]any); ok {
+			if spec, ok := meta["spec"].(map[string]any); ok {
+				if res, _ := spec["resource"].(string); res == "persistentvolumeclaims" {
+					name, _ := spec["name"].(string)
+					size, _ := m["occupiedSize"].(string)
+					out = append(out, VolumeArtifact{PVCName: name, Size: size})
+				}
+			}
+		}
 	}
 	return out, nil
 }
