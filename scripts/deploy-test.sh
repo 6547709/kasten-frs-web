@@ -186,6 +186,28 @@ step2_secrets() {
     ok "secrets applied (idempotent)"
 }
 
+step2b_rbac_can_i() {
+    step_start "2b" "rbac: auth can-i checks for wizard verbs"
+    require kubectl
+    # Verify the helper's ServiceAccount can create FRS, read RPs, and
+    # write the private-key secret. This is the M1 milestone gate.
+    SA="-n kasten-io sa/kasten-frs-web-helper"
+    for v in \
+        "create filerecoverysessions.datamover.kio.kasten.io" \
+        "delete filerecoverysessions.datamover.kio.kasten.io" \
+        "list  restorepoints.apps.kio.kasten.io" \
+        "get   restorepoints.apps.kio.kasten.io" \
+        "get   restorepoints.details.apps.kio.kasten.io" \
+        "create secret" \
+        "update secret" \
+        "patch  secret"; do
+        if ! kubectl auth can-i $v $SA; then
+            die "RBAC missing: SA cannot $v ($v $SA)"
+        fi
+    done
+    ok "RBAC can-i checks pass"
+}
+
 step3_overlay_apply() {
     step_start 3 "overlay: kustomize image override + apply"
     # Resolve script's own location to an absolute path. BASH_SOURCE[0] is
@@ -454,6 +476,7 @@ main() {
     parse_args "$@"
     step1_preflight
     step2_secrets
+    step2b_rbac_can_i
     step3_overlay_apply
     step4_wait_probe
     step5_netpol

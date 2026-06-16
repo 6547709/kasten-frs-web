@@ -5,7 +5,13 @@ metadata:
 rules:
 - apiGroups: ["datamover.kio.kasten.io"]
   resources: ["filerecoverysessions"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["apps.kio.kasten.io"]
+  resources: ["restorepoints"]
+  verbs: ["get", "list"]
+- apiGroups: ["apps.kio.kasten.io"]
+  resources: ["restorepoints/details"]
+  verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -29,7 +35,7 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   resourceNames: ["kasten-frs-helper-private-key"]
-  verbs: ["get"]
+  verbs: ["get", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
