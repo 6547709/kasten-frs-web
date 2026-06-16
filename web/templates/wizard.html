@@ -84,7 +84,7 @@
 <div id="vol-list-inner">
 {{range .Vols}}
 <label class="vol-item">
-  <input type="checkbox" name="pvcNames" value="{{.PVCName}}" checked>
+  <input type="checkbox" name="pvcNames" value="{{.PVCName}}">
   <span class="pvc-name">{{.PVCName}}</span>
   {{if .Size}}<span class="size">{{.Size}}</span>{{end}}
 </label>

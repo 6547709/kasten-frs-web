@@ -283,6 +283,28 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// partial=ready is the polling endpoint used by the "FRS 正在
+	// 准备" page. It must NEVER return a full layout — the polling
+	// div uses hx-swap="innerHTML" and a full <html> document
+	// nested into .browse-preparing corrupts the DOM. The
+	// expected outcome matrix:
+	//   FRS Ready       -> 200 + browse_filelist_fragment +
+	//                      HX-Redirect to /browse (the client
+	//                      does a full reload into the file
+	//                      list page).
+	//   FRS NotReady    -> 204 No Content; the existing
+	//                      preparing page keeps rendering and
+	//                      htmx polls again in 2s.
+	//   FRS error state -> 200 + an error body the client can
+	//                      display in place of the preparing
+	//                      block (e.g. Failed/Timeout).
+	// We resolve this up front, before any other branch can
+	// return a layout-rendering error or preparing page.
+	if r.URL.Query().Get("partial") == "ready" {
+		s.handlePartialReady(w, r, ref, path)
+		return
+	}
+
 	// Check watch map first for terminal states from wizard creation.
 	if ws, ok := s.watches.get(ref); ok && ws.Done {
 		if ws.State == "Ready" {
@@ -328,26 +350,10 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// partial=ready is the polling endpoint used by the "FRS 正在
-	// 准备" page. We must NOT return a full layout here — the polling
-	// div uses hx-swap="innerHTML" to drop the response into a
-	// sub-element, and a full <html> document would corrupt the DOM.
-	// Behaviour by FRS state:
-	//   Ready   -> 200 + browse_filelist_fragment + HX-Redirect
-	//              to /browse so the client does a full reload and
-	//              renders the proper page (browse_body, not the
-	//              preparing page)
-	//   !Ready  -> 204 No Content; client keeps polling
-	if r.URL.Query().Get("partial") == "ready" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("HX-Redirect", "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path="+url.QueryEscape(path))
-		if err := pageTemplates.ExecuteTemplate(w, "browse_filelist_fragment", map[string]any{
-			"FRS": ref, "Path": path, "Entries": entries, "User": s.auth.Username,
-		}); err != nil {
-			slog.Error("render browse fragment", "err", err)
-		}
-		return
-	}
+	// partial=ready was handled at the top of handleBrowse to keep
+	// every other branch (renderPreparing, renderError) from
+	// returning a full <html> document that htmx would otherwise
+	// inject into the preparing wrapper and corrupt the page.
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
@@ -361,6 +367,72 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		slog.Error("render browse", "err", err)
 	}
+}
+
+// handlePartialReady serves the preparing page's polling endpoint.
+// See the comment on partial=ready at the top of handleBrowse for
+// why this exists. Behaviour:
+//   FRS Ready   -> 200 + HX-Redirect (so the client does a full
+//                 reload into the file-list page; the body is a
+//                 stub browse_filelist_fragment that htmx discards
+//                 in favour of the redirect)
+//   NotReady    -> 204 No Content; the preparing page keeps
+//                 rendering and htmx polls again in 2s
+//   Failed/Timeout -> 200 with HX-Trigger that makes the page swap
+//                 in the new error state without a full reload
+func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref k8s.FRSRef, path string) {
+	// Watch-map state first; this is the fastest path on wizard
+	// creates that succeeded and are still in their background
+	// wait-for-ready goroutine.
+	if ws, ok := s.watches.get(ref); ok && ws.Done {
+		switch ws.State {
+		case "Ready":
+			s.redirectAfterReady(w, ref, path)
+		case "Failed", "Timeout":
+			// Re-render the preparing block with the terminal state
+			// so the user sees the failure inline. Returning the
+			// same layout-rendered block via the polling div is
+			// safe because the polling div uses hx-swap=innerHTML
+			// against .browse-preparing, replacing just itself
+			// with the new preparing block.
+			s.renderPreparing(w, ref, ws)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return
+	}
+
+	// No watch entry (operator pre-created FRS, or the wizard
+	// goroutine hasn't run yet): query the K8s API.
+	view, err := s.frsGet(r.Context(), ref)
+	if err != nil {
+		// Treat an error as "not ready, keep polling". Rendering a
+		// full error layout here would corrupt the DOM just as
+		// before.
+		slog.Warn("partial=ready frs query failed", "frs", ref.Namespace+"/"+ref.Name, "err", err)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	switch view.State {
+	case "Ready":
+		s.redirectAfterReady(w, ref, path)
+	case "Failed", "":
+		// "" is what K10 reports while it's still reconciling. Treat
+		// it as "not ready" so we don't prematurely redirect.
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// redirectAfterReady issues a 200 with HX-Redirect for the polling
+// endpoint when the FRS is Ready. The body is intentionally empty
+// — htmx follows the header and the client does a full /browse
+// reload.
+func (s *Server) redirectAfterReady(w http.ResponseWriter, ref k8s.FRSRef, path string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("HX-Redirect", "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path="+url.QueryEscape(path))
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) renderPreparing(w http.ResponseWriter, ref k8s.FRSRef, ws *watchState) {
