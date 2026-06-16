@@ -8,6 +8,12 @@
 # into the COPY'd web/ tree during fetch-htmx.sh (curl exits 23). Switching
 # to root for the build stage fixes it; the runtime stage already drops
 # privileges to uid 1001.
+# VERSION is injected by the CI workflow from the git tag (e.g. v0.3.1)
+# on tag builds, and defaults to "dev" for local builds. Declared at
+# the top of the file so it spans both build and runtime stages; an
+# in-stage ARG would be invisible to the second FROM.
+ARG VERSION=dev
+
 FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1781070142 AS build
 USER root
 WORKDIR /src
@@ -19,12 +25,12 @@ COPY --chown=0:0 cmd/ cmd/
 COPY --chown=0:0 internal/ internal/
 COPY --chown=0:0 web/ web/
 COPY --chown=0:0 scripts/ scripts/
-# VERSION is injected by the CI workflow from the git tag (e.g. v0.3.1)
-# on tag builds, and defaults to "dev" for local builds. Two outlets:
-#   1. baked into the binary via -ldflags (the UI footer reads it)
-#   2. exported as an env var (operators can `oc set env` to override,
-#      and `kubectl describe pod` shows the value too)
+# Re-declare ARG after FROM to make $VERSION visible in this stage.
 ARG VERSION=dev
+# Two outlets for the version:
+#   1. -ldflags stamps it into the binary (UI footer reads it)
+#   2. ENV exports it (operators can `oc set env` to override, and
+#      `kubectl describe pod` shows the value)
 ENV VERSION=${VERSION}
 RUN ./scripts/fetch-htmx.sh && \
     CGO_ENABLED=0 go build -trimpath -buildvcs=false \
@@ -32,6 +38,11 @@ RUN ./scripts/fetch-htmx.sh && \
         -o /out/helper ./cmd/helper
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8
+# Carry VERSION through the stage boundary so the runtime image
+# contains the same value the binary was compiled with. Without
+# re-declaring + re-assigning here, runtime ENV would be unset.
+ARG VERSION=dev
+ENV VERSION=${VERSION}
 RUN microdnf install -y --setopt=tsflags=nodocs ca-certificates && \
     microdnf clean all
 
