@@ -188,12 +188,12 @@ step2_secrets() {
 
 step2b_rbac_can_i() {
     step_start "2b" "rbac: auth can-i checks for wizard verbs"
-    require kubectl
+    require oc
     # Verify the helper's ServiceAccount can create FRS, read RPs, and
     # write the private-key secret. This is the M1 milestone gate.
-    # kubectl auth can-i takes `verb resource [resourceName]` and impersonates
+    # `oc auth can-i` takes `verb resource [resourceName]` and impersonates
     # the SA via --as=system:serviceaccount:NS:NAME (not `-n ns sa/name`,
-    # which is the `oc get` syntax and confuses kubectl).
+    # which is the `oc get` syntax and confuses `oc auth can-i`).
     SA="system:serviceaccount:kasten-io:kasten-frs-web-helper"
     NS_FOR_SA="kasten-io"
     for v in \
@@ -208,7 +208,7 @@ step2b_rbac_can_i() {
         # $v unquoted on purpose: each entry is 2-3 whitespace-separated tokens
         # (verb + resource [+ resourceName]); $SA/$NS_FOR_SA quoted to keep them atomic.
         # shellcheck disable=SC2086
-        if ! kubectl auth can-i $v --as="$SA" -n "$NS_FOR_SA"; then
+        if ! oc auth can-i $v --as="$SA" -n "$NS_FOR_SA"; then
             die "RBAC missing: SA cannot $v (as $SA in $NS_FOR_SA)"
         fi
     done
