@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/liguoqiang/kasten-frs-web/internal/auth"
 	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
@@ -96,9 +97,18 @@ func joinPath(parent, leaf string) string {
 }
 
 // FRSProvider abstracts the K8s FRS calls used by handlers.
+// The wizard (Task 8) added ListVMs / ListRestorePoints /
+// GetRestorePointDetails / CreateFRS / DeleteFRS / WaitForReady
+// on top of the original ListActiveFRS / GetFRS pair.
 type FRSProvider interface {
 	ListActiveFRS(ctx context.Context, namespaces []string) ([]k8s.FRSView, error)
 	GetFRS(ctx context.Context, ref k8s.FRSRef) (k8s.FRSView, error)
+	ListVMs(ctx context.Context, namespaces []string) ([]k8s.VM, error)
+	ListRestorePoints(ctx context.Context, ns, appName string) ([]k8s.RestorePoint, error)
+	GetRestorePointDetails(ctx context.Context, ns, name string) ([]k8s.VolumeArtifact, error)
+	CreateFRS(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error)
+	DeleteFRS(ctx context.Context, ns, name string) error
+	WaitForReady(ctx context.Context, ns, name string, timeout time.Duration) (k8s.FRSView, error)
 }
 
 // Server wires auth, SFTP pool, and FRS provider into a *http.ServeMux.
@@ -108,23 +118,38 @@ type Server struct {
 	frs         FRSProvider
 	mux         *http.ServeMux
 	username    string
+	pubKeyPEM   string
 	frsPort     int
 	nsWhitelist []string
 	logger      *slog.Logger
+	// watches tracks in-flight FRSes created by the wizard
+	// (Task 8). Keyed by FRSRef; entry is set to "Pending" on
+	// create and updated to "Ready"/"Failed"/"Timeout" by a
+	// background goroutine that runs WaitForReady.
+	watches *watchMap
+	// frsTimeout bounds how long the wizard's ready-watcher
+	// goroutine will wait for an FRS to become Ready before
+	// marking it as Timeout in the watch map. Sourced from
+	// HELPER_FRS_WAIT_TIMEOUT in config; defaults to 30s.
+	frsTimeout time.Duration
 }
 
 // New builds a Server.
 func New(a *auth.Authenticator, pool *sftpclient.Pool, frs FRSProvider,
-	username string, frsPort int, nsWhitelist []string) *Server {
+	username, pubKeyPEM string, frsPort int, nsWhitelist []string,
+	frsTimeout time.Duration) *Server {
 	s := &Server{
 		auth:        a,
 		pool:        pool,
 		frs:         frs,
 		mux:         http.NewServeMux(),
 		username:    username,
+		pubKeyPEM:   pubKeyPEM,
 		frsPort:     frsPort,
 		nsWhitelist: nsWhitelist,
 		logger:      slog.Default(),
+		watches:     &watchMap{m: make(map[k8s.FRSRef]*watchState)},
+		frsTimeout:  frsTimeout,
 	}
 	s.routes()
 	return s
@@ -159,9 +184,20 @@ func (s *Server) routes() {
 	authed := http.NewServeMux()
 	authed.HandleFunc("GET /sessions", s.handleSessions)
 	authed.HandleFunc("POST /sessions/{ns}/{name}/connect", s.handleConnect)
+	authed.HandleFunc("POST /sessions/{ns}/{name}/delete", s.handleSessionDelete)
 	authed.HandleFunc("GET /browse", s.handleBrowse)
+	authed.HandleFunc("POST /browse/extend", s.handleBrowseExtend)
 	authed.HandleFunc("GET /download", s.handleDownload)
 	authed.HandleFunc("GET /download-zip", s.handleDownloadZip)
+
+	// Wizard (Task 8): VM picker → RP picker → Volume picker → Create FRS.
+	authed.HandleFunc("GET /wizard", s.handleWizardPage)
+	authed.HandleFunc("GET /wizard/vms", s.handleWizardVMs)
+	authed.HandleFunc("GET /wizard/vms/{ns}/{name}/restorepoints", s.handleWizardRPs)
+	authed.HandleFunc("GET /wizard/rps/{ns}/{name}/details", s.handleWizardVolumes)
+	authed.HandleFunc("POST /wizard/create", s.handleWizardCreate)
+	authed.HandleFunc("POST /wizard/cancel", s.handleWizardCancel)
+
 	authed.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/sessions", http.StatusSeeOther)
 	})
@@ -237,19 +273,57 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, http.StatusBadRequest, "无效的 frs 查询", err.Error())
 		return
 	}
-	key := sftpclient.SessionKey{UserSessionID: userIDFromCookie(r, s.auth.CookieName),
-		FRS: types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}}
+
+	// Check watch map first for terminal states from wizard creation.
+	if ws, ok := s.watches.get(ref); ok && ws.Done {
+		if ws.State == "Ready" {
+			// fall through to normal browse
+		} else {
+			s.renderPreparing(w, ref, ws)
+			return
+		}
+	}
+
+	key := sftpclient.SessionKey{
+		UserSessionID: userIDFromCookie(r, s.auth.CookieName),
+		FRS:           types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name},
+	}
 	sess, ok := s.pool.Get(key)
 	if !ok {
-		http.Redirect(w, r, fmt.Sprintf("/sessions/%s/%s/connect", ref.Namespace, ref.Name),
-			http.StatusSeeOther)
+		// Need to (re)connect; check FRS state
+		view, err := s.frsGet(r.Context(), ref)
+		if err != nil {
+			if ws, ok := s.watches.get(ref); ok {
+				s.renderPreparing(w, ref, ws)
+				return
+			}
+			s.renderError(w, http.StatusBadGateway, "FRS 查询失败", err.Error())
+			return
+		}
+		if view.State != "Ready" {
+			s.renderPreparing(w, ref, &watchState{State: view.State, View: view})
+			return
+		}
+		http.Redirect(w, r, fmt.Sprintf("/sessions/%s/%s/connect", ref.Namespace, ref.Name), http.StatusSeeOther)
 		return
 	}
+
 	entries, err := sess.ListDir(path)
 	if err != nil {
 		s.renderError(w, http.StatusNotFound, "目录列表失败", err.Error())
 		return
 	}
+
+	if r.URL.Query().Get("partial") == "ready" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := pageTemplates.ExecuteTemplate(w, "browse_filelist_fragment", map[string]any{
+			"FRS": ref, "Path": path, "Entries": entries, "User": s.auth.Username,
+		}); err != nil {
+			slog.Error("render browse fragment", "err", err)
+		}
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
 		"Title":         "浏览 " + ref.Namespace + "/" + ref.Name,
@@ -261,6 +335,58 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		slog.Error("render browse", "err", err)
 	}
+}
+
+func (s *Server) renderPreparing(w http.ResponseWriter, ref k8s.FRSRef, ws *watchState) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
+		"Title":        "FRS 准备中",
+		"BodyTemplate": "browse_preparing_body",
+		"FRS":          ref,
+		"State":        ws.State,
+		"Error":        errString(ws.Err),
+		"User":         s.auth.Username,
+	}); err != nil {
+		slog.Error("render preparing", "err", err)
+	}
+}
+
+func errString(e error) string {
+	if e == nil {
+		return ""
+	}
+	return e.Error()
+}
+
+// handleBrowseExtend is the "再等 30 秒" button on the preparing
+// page. Per spec §9 + §15, when WaitForReady times out the user
+// must be able to extend the wait by another 30s instead of giving
+// up. We update the watch map to a fresh Pending state with the
+// current FRS view, then start a new watchFRSCreated goroutine
+// that polls WaitForReady with the configured timeout. The
+// browser is 303-redirected back to /browse where it will see
+// the new Pending state.
+func (s *Server) handleBrowseExtend(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderError(w, http.StatusBadRequest, "表单错误", err.Error())
+		return
+	}
+	frs := r.FormValue("frs")
+	parts := strings.SplitN(frs, "/", 2)
+	if len(parts) != 2 {
+		s.renderError(w, http.StatusBadRequest, "frs 参数错误", frs)
+		return
+	}
+	ref := k8s.FRSRef{Namespace: parts[0], Name: parts[1]}
+	// Fetch the current FRS view to seed the watch map with a sensible initial.
+	v, err := s.frsGet(r.Context(), ref)
+	if err != nil {
+		s.renderError(w, http.StatusBadGateway, "FRS 查询失败", err.Error())
+		return
+	}
+	s.watches.set(ref, &watchState{State: "Pending", View: v})
+	go s.watchFRSCreated(ref, v)
+	http.Redirect(w, r, "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path=/", http.StatusSeeOther)
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -475,5 +601,43 @@ func (s *Server) renderError(w http.ResponseWriter, status int, title, msg strin
 	}); err != nil {
 		slog.Error("render error page", "title", title, "err", err)
 	}
+}
+
+// FRSProvider method-forwarders. The wizard (Task 8) handlers
+// (in wizard.go) call these rather than reaching through s.frs
+// directly. Reasons:
+//   1. Each call site stays a single line (e.g. frsListVMs) and
+//      doesn't need to re-thread s.nsWhitelist.
+//   2. Tests can stub FRSProvider uniformly; the forwarders
+//      are the same shape as the underlying interface methods.
+//   3. If we later want to inject cross-cutting behavior
+//      (retries, metrics, tracing), it lives in one place.
+
+func (s *Server) frsListVMs(ctx context.Context) ([]k8s.VM, error) {
+	return s.frs.ListVMs(ctx, s.nsWhitelist)
+}
+
+func (s *Server) frsListRPs(ctx context.Context, ns, appName string) ([]k8s.RestorePoint, error) {
+	return s.frs.ListRestorePoints(ctx, ns, appName)
+}
+
+func (s *Server) frsListVolumes(ctx context.Context, ns, name string) ([]k8s.VolumeArtifact, error) {
+	return s.frs.GetRestorePointDetails(ctx, ns, name)
+}
+
+func (s *Server) frsGet(ctx context.Context, ref k8s.FRSRef) (k8s.FRSView, error) {
+	return s.frs.GetFRS(ctx, ref)
+}
+
+func (s *Server) frsCreate(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error) {
+	return s.frs.CreateFRS(ctx, ns, spec)
+}
+
+func (s *Server) frsDelete(ctx context.Context, ns, name string) error {
+	return s.frs.DeleteFRS(ctx, ns, name)
+}
+
+func (s *Server) frsWaitReady(ctx context.Context, ref k8s.FRSRef, timeout time.Duration) (k8s.FRSView, error) {
+	return s.frs.WaitForReady(ctx, ref.Namespace, ref.Name, timeout)
 }
 

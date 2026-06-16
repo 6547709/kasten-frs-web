@@ -21,6 +21,7 @@ type Config struct {
 	SFTPPoolTTL               time.Duration
 	SFTPConnectTimeout        time.Duration
 	FRSPort                   int
+	FRSWaitTimeout            time.Duration
 	FRSNamespaceWhitelist     []string
 	FRSDefaultUsername        string
 	PrivateKeySecretName      string
@@ -74,6 +75,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("HELPER_SFTP_TIMEOUT: %w", err)
 	}
 	c.SFTPConnectTimeout = connectTimeout
+
+	wait, err := time.ParseDuration(getenv("HELPER_FRS_WAIT_TIMEOUT", "30s"))
+	if err != nil {
+		return Config{}, fmt.Errorf("HELPER_FRS_WAIT_TIMEOUT: %w", err)
+	}
+	c.FRSWaitTimeout = wait
 
 	frsPort, err := strconv.Atoi(getenv("HELPER_FRS_PORT", "2222"))
 	if err != nil {

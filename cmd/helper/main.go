@@ -16,11 +16,11 @@ import (
 	"github.com/liguoqiang/kasten-frs-web/internal/config"
 	"github.com/liguoqiang/kasten-frs-web/internal/handlers"
 	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
+	"github.com/liguoqiang/kasten-frs-web/internal/keymgr"
 	"github.com/liguoqiang/kasten-frs-web/internal/logging"
 	"github.com/liguoqiang/kasten-frs-web/internal/metrics"
 	"github.com/liguoqiang/kasten-frs-web/internal/server"
 	"github.com/liguoqiang/kasten-frs-web/internal/sftpclient"
-	"golang.org/x/crypto/ssh"
 )
 
 func main() {
@@ -43,23 +43,15 @@ func run() error {
 		return fmt.Errorf("k8s client: %w", err)
 	}
 
-	// Load private key once at startup
-	creds, err := kc.LoadPrivateKey(context.Background(), k8s.CredentialsConfig{
-		Namespace: cfg.PrivateKeySecretNamespace,
-		Name:      cfg.PrivateKeySecretName,
-		Field:     cfg.PrivateKeyField,
-	})
+	// Load (or generate) the SSH keypair used for FRS SFTP auth.
+	km, err := keymgr.LoadOrGenerate(context.Background(), kc.Core(), cfg.PrivateKeySecretNamespace, cfg.PrivateKeySecretName)
 	if err != nil {
-		return fmt.Errorf("load private key: %w", err)
-	}
-	signer, err := parseSigner(creds.PrivateKey)
-	if err != nil {
-		return fmt.Errorf("parse private key: %w", err)
+		return fmt.Errorf("load/generate SSH key: %w", err)
 	}
 
 	sftpClient, err := sftpclient.NewClient(sftpclient.ClientConfig{
-		Username:       creds.Username,
-		Signer:         signer,
+		Username:       cfg.FRSDefaultUsername,
+		Signer:         km.Signer,
 		ConnectTimeout: cfg.SFTPConnectTimeout,
 		// HostKeySig is per-FRS; supplied at Dial time in handleConnect.
 	})
@@ -72,7 +64,7 @@ func run() error {
 		auth.NewSessionStore(cfg.CookieSecret, cfg.SessionTTL), "kfrs_sid")
 	registry := metrics.NewRegistry()
 
-	hs := handlers.New(sessions, pool, kc, creds.Username, cfg.FRSPort, cfg.FRSNamespaceWhitelist)
+	hs := handlers.New(sessions, pool, kc, cfg.FRSDefaultUsername, string(km.PubKeyPEM), cfg.FRSPort, cfg.FRSNamespaceWhitelist, cfg.FRSWaitTimeout)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", registry.Handler())
 	mux.Handle("/", server.SecurityHeaders(server.Recoverer(hs.Router())))
@@ -91,12 +83,4 @@ func run() error {
 
 	logger.Info("helper starting", "addr", l.Addr().String())
 	return server.Run(ctx, srv, l)
-}
-
-func parseSigner(pem []byte) (ssh.Signer, error) {
-	signer, err := ssh.ParsePrivateKey(pem)
-	if err != nil {
-		return nil, fmt.Errorf("parse private key: %w", err)
-	}
-	return signer, nil
 }

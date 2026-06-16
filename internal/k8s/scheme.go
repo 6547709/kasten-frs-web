@@ -19,5 +19,9 @@ func NewScheme() *runtime.Scheme {
 		schema.GroupVersionKind{Group: FRSGroupVersion.Group, Version: FRSGroupVersion.Version, Kind: "FileRecoverySessionList"},
 		&unstructured.UnstructuredList{},
 	)
+	s.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "apps.kio.kasten.io", Version: "v1alpha1", Kind: "RestorePointList"},
+		&unstructured.UnstructuredList{},
+	)
 	return s
 }

@@ -4,30 +4,17 @@
 
 1. OCP >= 4.11
 2. Kasten K10 with `filerecoverysessions.datamover.kio.kasten.io` CRD installed
-3. Generate a single keypair that will be used for all FRS:
-
-   ```bash
-   ssh-keygen -t ed25519 -f k10-frs.key -N "" -C "k10-frs"
-   ```
-
-4. Create the private-key Secret in the `kasten-io` namespace:
-
-   ```bash
-   oc create secret generic kasten-frs-helper-private-key \
-       --namespace=kasten-io \
-       --type=kubernetes.io/ssh-auth \
-       --from-file=ssh-privatekey=k10-frs.key
-   ```
-
-5. Generate Helper credentials and cookie secret (each >= 16 bytes):
-
+3. Generate Helper credentials and cookie secret (each >= 16 bytes):
    ```bash
    PW=$(openssl rand -base64 24)
    CS=$(openssl rand -base64 32)
    ```
-
-6. Create `kasten-frs-web-helper-credentials` Secret with the three values
+4. Create `kasten-frs-web-helper-credentials` Secret with the three values
    (`HELPER_USERNAME`, `HELPER_PASSWORD`, `HELPER_COOKIE_SECRET`).
+
+The helper will auto-generate and persist the SSH keypair on first start.
+The public key is embedded in every FRS the wizard creates; the private
+key never leaves the helper pod.
 
 ## Apply manifests
 
@@ -54,3 +41,11 @@ oc exec -n kasten-io $HELPER_POD -- bash -c "timeout 3 bash -c '</dev/tcp/frs-xx
 ## Troubleshooting
 
 See section 19 of the design spec.
+
+## Wizard smoke
+
+After the helper pod is Ready, log in via the Route and navigate to
+`/wizard`. You should see at least one VM (assuming K10 has a
+`virtualMachine`-labelled RestorePoint). Pick a VM, then a Bound RP,
+then any volume, and click **Create FRS**. You should be redirected
+to `/browse` showing the FRS directory tree within 30 seconds.

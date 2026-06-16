@@ -1,4 +1,14 @@
-{{define "browse_body"}}<table class="filelist">
+{{define "browse_body"}}<div>
+  <div class="browse-actions">
+    <form method="post" action="/sessions/{{.FRS.Namespace}}/{{.FRS.Name}}/delete"
+          onsubmit="return confirm('结束并删除 FRS {{.FRS.Namespace}}/{{.FRS.Name}}?')">
+      <button type="submit" class="danger">结束并删除 FRS</button>
+    </form>
+  </div>
+  {{template "browse_filelist_fragment" .}}
+</div>{{end}}
+
+{{define "browse_filelist_fragment"}}<table class="filelist">
   <thead>
     <tr>
       <th style="width: 50%">Name</th>
@@ -50,3 +60,27 @@
     {{end}}
   </tbody>
 </table>{{end}}
+
+{{define "browse_preparing_body"}}<div class="browse-preparing">
+  <h1>⏳ FRS 正在准备</h1>
+  <p>{{.FRS.Namespace}}/{{.FRS.Name}} 状态：<span class="badge {{.State | lower}}">{{.State}}</span></p>
+  <p>等待时间：<span id="elapsed">0</span> 秒</p>
+  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+  <form method="post" action="/wizard/cancel">
+    <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
+    <button type="submit" class="danger">取消并删除 FRS</button>
+  </form>
+  <form method="post" action="/browse/extend" style="display:inline">
+    <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
+    <button type="submit">再等 30 秒</button>
+  </form>
+  <div hx-get="/browse?frs={{.FRS.Namespace}}/{{.FRS.Name}}&path=/&partial=ready"
+       hx-trigger="every 2s" hx-swap="outerHTML" style="display:none"></div>
+</div>
+<script>
+(function(){
+  const start = Date.now();
+  const el = document.getElementById('elapsed');
+  if (el) setInterval(() => { el.textContent = Math.floor((Date.now()-start)/1000); }, 1000);
+})();
+</script>{{end}}

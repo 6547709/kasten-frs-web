@@ -406,6 +406,10 @@ a:hover { text-decoration: underline; }
   cursor: pointer;
 }
 .simple-table td.action button:hover { background: var(--k10-accent-hover); }
+.badge.warn { background: #FFF4D6; color: #8A6A0A; border-color: #E6C97A; }
+.badge.crit { background: #FFE0E0; color: #B02020; border-color: #D97070; }
+button.danger { background: #B02020; color: #fff; border-color: #B02020; }
+button.danger:hover { background: #D03030; }
 
 /* --- bottom status bar --- */
 .statusbar {
@@ -557,3 +561,54 @@ a:hover { text-decoration: underline; }
   color: var(--k10-text);
 }
 .error-card a { font-size: 12px; }
+
+.wizard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  margin: 16px 0;
+}
+.wizard-panel {
+  background: #fff;
+  border: 1px solid #D5DBE0;
+  border-radius: 4px;
+  padding: 12px;
+  min-height: 320px;
+}
+.panel-title {
+  font-weight: 600;
+  color: #4A5560;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.vm-list, #rp-list, #vol-list {
+  list-style: none;
+  margin: 0; padding: 0;
+  max-height: 360px; overflow-y: auto;
+}
+.vm-item, .rp-item {
+  padding: 6px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  margin-bottom: 4px;
+}
+.vm-item:hover, .rp-item:hover { background: #F0F3F6; }
+.vm-item.selected, .rp-item.selected {
+  background: #E1F0FF; border-color: #6FA8DC;
+}
+.vm-meta, .rp-meta { font-size: 11px; color: #6B7480; }
+.wizard-create {
+  background: #fff;
+  padding: 12px;
+  border-top: 1px solid #D5DBE0;
+  border-radius: 4px;
+  margin-top: 12px;
+}
+.wizard-create button[disabled] { opacity: 0.5; cursor: not-allowed; }
+.vol-item { display: block; padding: 4px 0; }
+.browse-actions { margin-bottom: 12px; text-align: right; }
+.browse-preparing { padding: 40px; text-align: center; }
+.browse-preparing h1 { font-size: 18px; color: #4A5560; margin-bottom: 16px; }
+.browse-preparing .err { color: #B02020; margin: 16px 0; }
+.empty { color: #8A95A2; font-style: italic; padding: 12px; }
