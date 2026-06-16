@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type fakeFRS struct {
@@ -69,11 +68,6 @@ func (f *fakeFRS) CreateFRS(_ context.Context, ns string, _ k8s.FRSpec) (*k8s.FR
 	return &k8s.FRSView{Ref: k8s.FRSRef{Namespace: ns, Name: f.name}}, nil
 }
 func (f *fakeFRS) DeleteFRS(_ context.Context, _, _ string) error { return nil }
-func (f *fakeFRS) CloneDataVolume(_ context.Context, _ string, _ k8s.DataVolumeSource) (*unstructured.Unstructured, error) {
-	return nil, fmt.Errorf("not stubbed")
-}
-func (f *fakeFRS) WaitDataVolumeSucceeded(_ context.Context, _, _ string, _ time.Duration) error { return nil }
-func (f *fakeFRS) DeleteDataVolume(_ context.Context, _, _ string) error { return nil }
 func (f *fakeFRS) WaitForReady(_ context.Context, ns, name string, _ time.Duration) (k8s.FRSView, error) {
 	return k8s.FRSView{Ref: k8s.FRSRef{Namespace: ns, Name: name}, State: "Ready"}, nil
 }

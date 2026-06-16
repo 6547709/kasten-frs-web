@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,7 +12,6 @@ import (
 	"github.com/liguoqiang/kasten-frs-web/internal/auth"
 	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
 	"github.com/liguoqiang/kasten-frs-web/internal/sftpclient"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // stubProvider is a minimal FRSProvider for wizard tests.
@@ -23,7 +21,6 @@ type stubProvider struct {
 	rps      []k8s.RestorePoint
 	vols     []k8s.VolumeArtifact
 	createFn func(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error)
-	cloneFn  func(ctx context.Context, ns string, src k8s.DataVolumeSource) (*unstructured.Unstructured, error)
 }
 
 func (s *stubProvider) ListActiveFRS(_ context.Context, _ []string) ([]k8s.FRSView, error) {
@@ -51,14 +48,6 @@ func (s *stubProvider) CreateFRS(ctx context.Context, ns string, spec k8s.FRSpec
 	return &k8s.FRSView{Ref: k8s.FRSRef{Namespace: ns, Name: "frs-wizard-abcde"}, State: "Starting"}, nil
 }
 func (s *stubProvider) DeleteFRS(_ context.Context, _, _ string) error { return nil }
-func (s *stubProvider) CloneDataVolume(ctx context.Context, ns string, src k8s.DataVolumeSource) (*unstructured.Unstructured, error) {
-	if s.cloneFn != nil {
-		return s.cloneFn(ctx, ns, src)
-	}
-	return nil, fmt.Errorf("not stubbed")
-}
-func (s *stubProvider) WaitDataVolumeSucceeded(_ context.Context, _, _ string, _ time.Duration) error { return nil }
-func (s *stubProvider) DeleteDataVolume(_ context.Context, _, _ string) error { return nil }
 func (s *stubProvider) WaitForReady(_ context.Context, ns, name string, _ time.Duration) (k8s.FRSView, error) {
 	return k8s.FRSView{Ref: k8s.FRSRef{Namespace: ns, Name: name}, State: "Ready"}, nil
 }
@@ -99,17 +88,7 @@ func TestHandleWizardPage_Renders(t *testing.T) {
 }
 
 func TestHandleWizardCreate_RedirectsToBrowse(t *testing.T) {
-	stub := &stubProvider{
-		vols: []k8s.VolumeArtifact{
-			{PVCName: "data-pvc", PVCNamespace: "default", Size: "10Gi", StorageClass: "synology-iscsi-storage"},
-		},
-		cloneFn: func(_ context.Context, _ string, _ k8s.DataVolumeSource) (*unstructured.Unstructured, error) {
-			dv := &unstructured.Unstructured{}
-			dv.SetName("dv-wizard-data-pvc-test01")
-			dv.SetNamespace("default")
-			return dv, nil
-		},
-	}
+	stub := &stubProvider{}
 	s := newWizardTestServer(t, stub)
 	form := url.Values{}
 	form.Set("vmNs", "default")

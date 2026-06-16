@@ -149,12 +149,9 @@ func (s *Server) handleWizardVolumes(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleWizardCreate is the wizard's POST endpoint. It validates
-// the form, clones the selected PVCs into wizard-managed
-// DataVolumes (so K10's datamover finds a matching snapshot in
-// the RestorePoint artifact list), creates the FRS, records a
-// Pending entry in the watch map, kicks off the ready-watcher
-// goroutine, and redirects the browser straight to /browse for
-// the new FRS.
+// the form, creates the FRS, records a Pending entry in the watch
+// map, kicks off the ready-watcher goroutine, and redirects the
+// browser straight to /browse for the new FRS.
 //
 // We use GenerateName="frs-wizard-" on the k8s side, so we don't
 // know the assigned name until CreateFRS returns. The redirect
@@ -176,90 +173,14 @@ func (s *Server) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, http.StatusInternalServerError, "无 SSH 公钥", "helper 启动时未加载 SSH 公钥")
 		return
 	}
-
-	// Pull the RP /details so we know each selected PVC's
-	// namespace, size, and storage class — needed for the
-	// DataVolume clone spec.
-	arts, err := s.frsListVolumes(r.Context(), vmNs, rpName)
-	if err != nil {
-		slog.Error("wizard.create.rp-details", "user", s.auth.Username, "rp", vmNs+"/"+rpName, "err", err)
-		s.renderError(w, http.StatusBadGateway, "获取还原点详情失败", err.Error())
-		return
-	}
-	byName := make(map[string]k8s.VolumeArtifact, len(arts))
-	for _, a := range arts {
-		byName[a.PVCName] = a
-	}
-
-	// Clone each selected PVC into a wizard-owned DataVolume, wait
-	// for Succeeded, and use the resulting DV name in the FRS
-	// spec. K10's datamover refuses FRSes whose pvcName is the
-	// source PVC directly with "snapshot not found"; only the
-	// clone DV appears in the RP artifact list with snapshot meta.
-	dvNames := make([]string, 0, len(pvcNames))
-	clonedDVs := make([]string, 0, len(pvcNames)) // for cleanup on FRS failure
-	defer func() {
-		if len(clonedDVs) == 0 {
-			return
-		}
-		// Best-effort cleanup of DV clones that we created but
-		// never handed off to a usable FRS.
-		for _, n := range clonedDVs {
-			if err := s.frsDeleteDataVolume(context.Background(), vmNs, n); err == nil {
-				slog.Info("wizard.create.dv-cleanup", "dv", vmNs+"/"+n)
-			}
-		}
-	}()
-	for _, pvc := range pvcNames {
-		a, ok := byName[pvc]
-		if !ok {
-			slog.Error("wizard.create.pvc-not-in-rp", "pvc", pvc, "rp", vmNs+"/"+rpName)
-			s.renderError(w, http.StatusBadRequest, "PVC 不在还原点中",
-				"PVC "+pvc+" 不是 "+rpName+" 的 artifact")
-			return
-		}
-		srcNS := a.PVCNamespace
-		if srcNS == "" {
-			srcNS = vmNs
-		}
-		dvTimeout := s.frsTimeout
-		if dvTimeout == 0 {
-			dvTimeout = 5 * time.Minute
-		}
-		slog.Info("wizard.create.clone-dv",
-			"user", s.auth.Username, "pvc", pvc,
-			"src_ns", srcNS, "size", a.Size, "sc", a.StorageClass,
-		)
-		dv, err := s.frsCloneDataVolume(r.Context(), vmNs, k8s.DataVolumeSource{
-			SourcePVC: pvc, SourcePVCNS: srcNS,
-			Size: a.Size, StorageClass: a.StorageClass,
-		})
-		if err != nil {
-			slog.Error("wizard.create.clone-dv.failed", "pvc", pvc, "err", err)
-			s.renderError(w, http.StatusBadGateway, "克隆 DataVolume 失败", err.Error())
-			return
-		}
-		dvName := dv.GetName()
-		clonedDVs = append(clonedDVs, dvName)
-		if err := s.frsWaitDataVolume(r.Context(), vmNs, dvName, dvTimeout); err != nil {
-			slog.Error("wizard.create.clone-dv.wait", "dv", vmNs+"/"+dvName, "err", err)
-			s.renderError(w, http.StatusGatewayTimeout, "DataVolume 未就绪", err.Error())
-			return
-		}
-		dvNames = append(dvNames, dvName)
-		slog.Info("wizard.create.clone-dv.ready", "pvc", pvc, "dv", dvName)
-	}
-	// All DVs are Succeeded — hand them off to the FRS.
-	clonedDVs = nil
-
 	slog.Info("wizard.create",
 		"user", s.auth.Username,
 		"vm_ns", vmNs, "vm_name", vmName,
-		"rp_name", rpName, "dv_count", len(dvNames),
+		"rp_name", rpName, "pvc_count", len(pvcNames),
 	)
 	view, err := s.frsCreate(r.Context(), vmNs, k8s.FRSpec{
 		RestorePointName: rpName,
-		PVCNames:         dvNames,
+		PVCNames:         pvcNames,
 		SSHUserPublicKey: s.pubKeyPEM,
 	})
 	if err != nil {

@@ -36,14 +36,9 @@ type RestorePoint struct {
 }
 
 // VolumeArtifact is a PVC exposed via the RestorePoint /details subresource.
-// PVCNamespace and StorageClass are populated when the nested-meta
-// schema carries them; they're used by the wizard to issue a
-// DataVolume clone that K10's datamover can find a snapshot for.
 type VolumeArtifact struct {
-	PVCName      string
-	PVCNamespace string
-	Size         string
-	StorageClass string
+	PVCName string
+	Size    string
 }
 
 // ListVMs returns all VMs discovered via appType=virtualMachine RPs,
@@ -152,156 +147,38 @@ func (c *Client) ListRestorePoints(ctx context.Context, ns, appName string) ([]R
 }
 
 // GetRestorePointDetails fetches the /details subresource and returns
-// PVC artifacts. Uses an http.Client with the in-cluster bearer token
-// rather than a typed REST client: the dynamic client doesn't expose
-// subresources and the typed REST client wants a GroupVersion +
-// NegotiatedSerializer that the apps.kio.kasten.io API doesn't define
-// in our scheme. DoRaw is sufficient because we only need the raw
-// JSON body for parseDetailsPVCs.
+// PVC artifacts. The raw subresource is fetched via a REST client.
 func (c *Client) GetRestorePointDetails(ctx context.Context, ns, name string) ([]VolumeArtifact, error) {
-	body, err := c.doK8sRequest(ctx, "GET",
+	rc, err := buildRESTFor(c)
+	if err != nil {
+		return nil, err
+	}
+	body, err := rc.Get().AbsPath(
 		fmt.Sprintf("/apis/apps.kio.kasten.io/v1alpha1/namespaces/%s/restorepoints/%s/details", ns, name),
-	)
+	).DoRaw(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get rp details: %w", err)
 	}
 	return parseDetailsPVCs(body)
 }
 
-// parseDetailsPVCs extracts PVC artifacts from the RestorePoint /details
-// JSON body. K10's actual schema nests the artifact list at
-// status.restorePointDetails.artifacts, and identifies each artifact by
-// resource group (e.g. "persistentvolumeclaims") rather than by a flat
-// "kind" field. Earlier code looked at the top-level `artifacts` and
-// found nothing on real clusters.
+// parseDetailsPVCs extracts PVC artifacts from the RestorePoint /details JSON body.
 func parseDetailsPVCs(body []byte) ([]VolumeArtifact, error) {
-	var doc struct {
-		Status struct {
-			RestorePointDetails struct {
-				Artifacts []map[string]any `json:"artifacts"`
-			} `json:"restorePointDetails"`
-		} `json:"status"`
+	var raw struct {
+		Artifacts []map[string]any `json:"artifacts"`
 	}
-	if err := json.Unmarshal(body, &doc); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("unmarshal details: %w", err)
 	}
-	artifacts := doc.Status.RestorePointDetails.Artifacts
-	if len(artifacts) == 0 {
-		// Fall back to a top-level artifacts array in case the deployment
-		// uses a slightly different shape (e.g. older K10 or a custom
-		// mirror).
-		var alt struct {
-			Artifacts []map[string]any `json:"artifacts"`
-		}
-		if err := json.Unmarshal(body, &alt); err == nil {
-			artifacts = alt.Artifacts
-		}
-	}
 	var out []VolumeArtifact
-	for _, m := range artifacts {
-		// Two ways an artifact can identify itself as a PVC:
-		//  1. flat:   {"kind":"PersistentVolumeClaim",...}
-		//  2. nested: {"meta":{"spec":{"resource":"persistentvolumeclaims",...}},...}
-		if kind, _ := m["kind"].(string); kind == "PersistentVolumeClaim" {
-			pvc, _ := m["name"].(string)
-			size, _ := m["occupiedSize"].(string)
-			out = append(out, VolumeArtifact{PVCName: pvc, Size: size})
+	for _, m := range raw.Artifacts {
+		kind, _ := m["kind"].(string)
+		if kind != "PersistentVolumeClaim" {
 			continue
 		}
-		if meta, ok := m["meta"].(map[string]any); ok {
-			if spec, ok := meta["spec"].(map[string]any); ok {
-				if res, _ := spec["resource"].(string); res == "persistentvolumeclaims" {
-					name, _ := spec["name"].(string)
-					pvcNs, _ := spec["namespace"].(string)
-					size, _ := m["occupiedSize"].(string)
-					// meta.spec.config is a JSON-stringified copy of
-					// the live PVC spec; pull storageClassName +
-					// resources.requests.storage from it so the
-					// wizard can issue a matching DataVolume clone.
-					var storageClass, pvcSize string
-					if cfgStr, _ := spec["config"].(string); cfgStr != "" {
-						var cfg map[string]any
-						if json.Unmarshal([]byte(cfgStr), &cfg) == nil {
-							storageClass, _ = cfg["spec"].(map[string]any)["storageClassName"].(string)
-							if res, ok := cfg["spec"].(map[string]any)["resources"].(map[string]any); ok {
-								if req, ok := res["requests"].(map[string]any); ok {
-									if v, ok := req["storage"].(string); ok {
-										pvcSize = v
-									}
-								}
-							}
-						}
-					}
-					if size == "" {
-						size = humanStorageQuantity(pvcSize)
-					} else {
-						size = humanStorageQuantity(size)
-					}
-					out = append(out, VolumeArtifact{
-						PVCName:      name,
-						PVCNamespace: pvcNs,
-						Size:         size,
-						StorageClass: storageClass,
-					})
-				}
-			}
-		}
+		pvc, _ := m["name"].(string)
+		size, _ := m["occupiedSize"].(string)
+		out = append(out, VolumeArtifact{PVCName: pvc, Size: size})
 	}
 	return out, nil
-}
-
-// humanStorageQuantity normalises a K8s storage quantity to a
-// human-friendly string the DataVolume spec will accept. K10's RP
-// artifact often returns raw bytes ("107374182400"); the DV
-// resources.requests.storage field requires a suffix like "Gi".
-// If the input already has a suffix, return it unchanged.
-func humanStorageQuantity(s string) string {
-	if s == "" {
-		return s
-	}
-	if !isAllDigits(s) {
-		return s
-	}
-	const (
-		Ki = 1 << 10
-		Mi = 1 << 20
-		Gi = 1 << 30
-		Ti = 1 << 40
-	)
-	n := parseUint(s)
-	switch {
-	case n >= Ti && n%Ti == 0:
-		return fmt.Sprintf("%dTi", n/Ti)
-	case n >= Gi && n%Gi == 0:
-		return fmt.Sprintf("%dGi", n/Gi)
-	case n >= Mi && n%Mi == 0:
-		return fmt.Sprintf("%dMi", n/Mi)
-	case n >= Ki && n%Ki == 0:
-		return fmt.Sprintf("%dKi", n/Ki)
-	default:
-		return fmt.Sprintf("%d", n)
-	}
-}
-
-func isAllDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func parseUint(s string) uint64 {
-	var n uint64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			break
-		}
-		n = n*10 + uint64(c-'0')
-	}
-	return n
 }
