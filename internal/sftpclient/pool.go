@@ -92,3 +92,17 @@ func (p *Pool) Sweep() {
 
 // Client returns the underlying SFTP client used for new dials.
 func (p *Pool) Client() *Client { return p.client }
+
+// CloseAllForFRS closes all pooled SFTP sessions associated with a particular FRS ref.
+// Called when the user clicks "End and delete" to release the helper's
+// connection promptly (instead of waiting for the 30m idle TTL).
+func (p *Pool) CloseAllForFRS(ns, name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for k, e := range p.entries {
+		if k.FRS.Namespace == ns && k.FRS.Name == name {
+			delete(p.entries, k)
+			go e.sess.Close()
+		}
+	}
+}

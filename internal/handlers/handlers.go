@@ -182,6 +182,7 @@ func (s *Server) routes() {
 	authed := http.NewServeMux()
 	authed.HandleFunc("GET /sessions", s.handleSessions)
 	authed.HandleFunc("POST /sessions/{ns}/{name}/connect", s.handleConnect)
+	authed.HandleFunc("POST /sessions/{ns}/{name}/delete", s.handleSessionDelete)
 	authed.HandleFunc("GET /browse", s.handleBrowse)
 	authed.HandleFunc("GET /download", s.handleDownload)
 	authed.HandleFunc("GET /download-zip", s.handleDownloadZip)
@@ -269,19 +270,57 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, http.StatusBadRequest, "无效的 frs 查询", err.Error())
 		return
 	}
-	key := sftpclient.SessionKey{UserSessionID: userIDFromCookie(r, s.auth.CookieName),
-		FRS: types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}}
+
+	// Check watch map first for terminal states from wizard creation.
+	if ws, ok := s.watches.get(ref); ok && ws.Done {
+		if ws.State == "Ready" {
+			// fall through to normal browse
+		} else {
+			s.renderPreparing(w, ref, ws)
+			return
+		}
+	}
+
+	key := sftpclient.SessionKey{
+		UserSessionID: userIDFromCookie(r, s.auth.CookieName),
+		FRS:           types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name},
+	}
 	sess, ok := s.pool.Get(key)
 	if !ok {
-		http.Redirect(w, r, fmt.Sprintf("/sessions/%s/%s/connect", ref.Namespace, ref.Name),
-			http.StatusSeeOther)
+		// Need to (re)connect; check FRS state
+		view, err := s.frsGet(r.Context(), ref)
+		if err != nil {
+			if ws, ok := s.watches.get(ref); ok {
+				s.renderPreparing(w, ref, ws)
+				return
+			}
+			s.renderError(w, http.StatusBadGateway, "FRS 查询失败", err.Error())
+			return
+		}
+		if view.State != "Ready" {
+			s.renderPreparing(w, ref, &watchState{State: view.State, View: view})
+			return
+		}
+		http.Redirect(w, r, fmt.Sprintf("/sessions/%s/%s/connect", ref.Namespace, ref.Name), http.StatusSeeOther)
 		return
 	}
+
 	entries, err := sess.ListDir(path)
 	if err != nil {
 		s.renderError(w, http.StatusNotFound, "目录列表失败", err.Error())
 		return
 	}
+
+	if r.URL.Query().Get("partial") == "ready" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := pageTemplates.ExecuteTemplate(w, "browse_filelist_fragment", map[string]any{
+			"FRS": ref, "Path": path, "Entries": entries, "User": s.auth.Username,
+		}); err != nil {
+			slog.Error("render browse fragment", "err", err)
+		}
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
 		"Title":         "浏览 " + ref.Namespace + "/" + ref.Name,
@@ -293,6 +332,27 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		slog.Error("render browse", "err", err)
 	}
+}
+
+func (s *Server) renderPreparing(w http.ResponseWriter, ref k8s.FRSRef, ws *watchState) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
+		"Title":        "FRS 准备中",
+		"BodyTemplate": "browse_preparing_body",
+		"FRS":          ref,
+		"State":        ws.State,
+		"Error":        errString(ws.Err),
+		"User":         s.auth.Username,
+	}); err != nil {
+		slog.Error("render preparing", "err", err)
+	}
+}
+
+func errString(e error) string {
+	if e == nil {
+		return ""
+	}
+	return e.Error()
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
