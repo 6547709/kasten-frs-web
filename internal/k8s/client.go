@@ -75,9 +75,20 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if hostBase == "" {
 		hostBase = "https://kubernetes.default.svc"
 	}
+	// http.DefaultClient does not honour cfg.TLSClientConfig, so the
+	// apiserver's custom CA bundle would be ignored and requests
+	// fail with "x509: certificate signed by unknown authority".
+	// Clone DefaultTransport and inject the kube TLS config.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tlsCfg, err := rest.TLSConfigFor(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("tls config: %w", err)
+	}
+	tr.TLSClientConfig = tlsCfg
+	httpClient := &http.Client{Transport: tr}
 	return &Client{
 		core: core, dyn: dyn, cfg: cfg,
-		http:     http.DefaultClient,
+		http:     httpClient,
 		hostBase: hostBase,
 	}, nil
 }
