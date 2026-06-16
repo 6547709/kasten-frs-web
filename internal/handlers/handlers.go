@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -309,7 +310,12 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if view.State != "Ready" {
-			s.renderPreparing(w, ref, &watchState{State: view.State, View: view})
+			// Synthesize a watchState with Done=true so the next poll
+			// hits the "ws.Done && ws.State != Ready" branch and shows
+			// the preparing page (instead of falling through to the
+			// SFTP dial path, which would 502 because the FRS hasn't
+			// bound a Service yet).
+			s.renderPreparing(w, ref, &watchState{State: view.State, View: view, Done: true})
 			return
 		}
 		http.Redirect(w, r, fmt.Sprintf("/sessions/%s/%s/connect", ref.Namespace, ref.Name), http.StatusSeeOther)
@@ -322,8 +328,19 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// partial=ready is the polling endpoint used by the "FRS 正在
+	// 准备" page. We must NOT return a full layout here — the polling
+	// div uses hx-swap="innerHTML" to drop the response into a
+	// sub-element, and a full <html> document would corrupt the DOM.
+	// Behaviour by FRS state:
+	//   Ready   -> 200 + browse_filelist_fragment + HX-Redirect
+	//              to /browse so the client does a full reload and
+	//              renders the proper page (browse_body, not the
+	//              preparing page)
+	//   !Ready  -> 204 No Content; client keeps polling
 	if r.URL.Query().Get("partial") == "ready" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("HX-Redirect", "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path="+url.QueryEscape(path))
 		if err := pageTemplates.ExecuteTemplate(w, "browse_filelist_fragment", map[string]any{
 			"FRS": ref, "Path": path, "Entries": entries, "User": s.auth.Username,
 		}); err != nil {

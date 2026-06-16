@@ -46,7 +46,7 @@
         </a>
         {{end}}
       </td>
-      <td class="size">{{.Size}} bytes</td>
+      <td class="size">{{if .Size}}{{.Size}} bytes{{else}}—{{end}}</td>
       <td class="modtime">{{.ModTime.Format "2006-01-02 15:04:05"}}</td>
       <td class="actions">
         {{if .IsDir}}
@@ -74,8 +74,12 @@
     <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
     <button type="submit">再等 30 秒</button>
   </form>
+  <!-- Polls /browse?partial=ready every 2s. While the FRS isn't Ready
+       yet, the handler renders this same preparing page; htmx swaps
+       innerHTML on this wrapper, so a Ready response replaces the
+       whole .browse-preparing block with the file-list + layout. -->
   <div hx-get="/browse?frs={{.FRS.Namespace}}/{{.FRS.Name}}&path=/&partial=ready"
-       hx-trigger="every 2s" hx-swap="outerHTML" style="display:none"></div>
+       hx-trigger="every 2s" hx-swap="innerHTML" hx-target="closest .browse-preparing"></div>
 </div>
 <script>
 (function(){

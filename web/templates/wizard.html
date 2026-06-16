@@ -14,7 +14,8 @@
     <section class="wizard-panel" id="panel-vms">
       <div class="panel-title">第 1 步：选虚拟机</div>
       <input type="search" id="vm-filter" placeholder="搜索 VM 名（可滚动列表）…" autocomplete="off">
-      <ul class="vm-list" id="vm-list">
+      <ul class="vm-list" id="vm-list"
+          hx-get="/wizard/vms" hx-trigger="load" hx-swap="innerHTML">
         <li class="empty">载入中…</li>
       </ul>
       <div class="vm-count" id="vm-count"></div>
@@ -49,8 +50,10 @@
   const $ = (s, r=document) => r.querySelector(s);
   const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 
-  // initial VM list = all namespaces (so the user sees something on first load)
-  htmx.ajax('GET', '/wizard/vms', {target:'#vm-list', swap:'innerHTML'});
+  // VM list is loaded declaratively via hx-get="load" on the <ul>.
+  // Doing it imperatively here races with htmx processing — if the
+  // IIFE runs before htmx has scanned the DOM, the imperative ajax
+  // fires without an OOB handler and silently no-ops.
 
   function applyFilter() {
     const q = ($('#vm-filter').value || '').toLowerCase();
@@ -82,9 +85,10 @@
       $('#vol-list').innerHTML = '<p class="empty">从中间选一个还原点</p>';
       // reset filter so changing namespace doesn't keep the old search
       $('#vm-filter').value = '';
-      $('#vm-list').innerHTML = '<li class="empty">载入中…</li>';
-      const url = ns ? '/wizard/vms?ns=' + encodeURIComponent(ns) : '/wizard/vms';
-      htmx.ajax('GET', url, {target:'#vm-list', swap:'innerHTML'});
+      const list = $('#vm-list');
+      list.setAttribute('hx-get', ns ? '/wizard/vms?ns=' + encodeURIComponent(ns) : '/wizard/vms');
+      list.innerHTML = '<li class="empty">载入中…</li>';
+      htmx.trigger(list, 'load');
     });
   }
 
@@ -100,12 +104,38 @@
     htmx.ajax('GET', '/wizard/vms/'+encodeURIComponent(ns)+'/'+encodeURIComponent(name)+'/restorepoints', {target:'#rp-list', swap:'innerHTML'});
   });
 
+  // Bind RP click handler on every rp-list swap. Stash the previous
+  // handler on the element so we can remove it before adding the new
+  // one — without this, every #rp-list swap stacked another listener
+  // and a single click would fire N handlers (the N-1 oldest pointing
+  // at a removed DOM node via dataset, causing the wizard to throw
+  // "Cannot read property of null" silently).
+  const rpList = $('#rp-list');
+  if (rpList) {
+    const newHandler = e2 => {
+      const li = e2.target.closest('li');
+      if (!li) return;
+      $$('#rp-list li').forEach(x => x.classList.remove('selected'));
+      li.classList.add('selected');
+      const name = li.dataset.rpName;
+      $('#rp-name').value = name;
+      htmx.ajax('GET', '/wizard/rps/'+encodeURIComponent(li.dataset.rpNs)+'/'+encodeURIComponent(name)+'/details', {target:'#vol-list', swap:'innerHTML'});
+    };
+    if (rpList._rpClick) rpList.removeEventListener('click', rpList._rpClick);
+    rpList._rpClick = newHandler;
+    rpList.addEventListener('click', newHandler);
+  }
+
   document.body.addEventListener('htmx:afterRequest', e => {
     if (e.target.id === 'vm-list') {
       // refresh filter + count after every namespace-driven swap
       if (typeof applyFilter === 'function') applyFilter();
     }
     if (e.target.id === 'rp-list') {
+      // rp-list nodes are replaced by htmx innerHTML, so the listener
+      // we just attached above is on the OLD node. Re-bind on the new
+      // node once htmx is done swapping.
+      const list = e.target;
       const handler = e2 => {
         const li = e2.target.closest('li');
         if (!li) return;
@@ -115,9 +145,9 @@
         $('#rp-name').value = name;
         htmx.ajax('GET', '/wizard/rps/'+encodeURIComponent(li.dataset.rpNs)+'/'+encodeURIComponent(name)+'/details', {target:'#vol-list', swap:'innerHTML'});
       };
-      // Use a named handler so it survives repeat rp-list swaps
-      $('#rp-list')._rpClick = handler;
-      $('#rp-list').addEventListener('click', handler);
+      if (list._rpClick) list.removeEventListener('click', list._rpClick);
+      list._rpClick = handler;
+      list.addEventListener('click', handler);
     }
     if (e.target.id === 'vol-list') {
       const any = $$('#vol-list input[name=pvcNames]').length > 0;
@@ -163,7 +193,7 @@
   </div>
 </li>
 {{else}}
-<li class="empty">这个 VM 没有 Bound 的还原点。</li>
+<li class="empty">这个 VM 没有可用的还原点。</li>
 {{end}}{{end}}
 
 {{define "wizard_vols_fragment"}}

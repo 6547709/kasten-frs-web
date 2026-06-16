@@ -584,6 +584,12 @@ button.danger:hover { background: #D03030; }
 .vm-list, #rp-list, #vol-list {
   list-style: none;
   margin: 0; padding: 0;
+}
+/* VM list lives in the first wizard column; give it a fixed scroll
+   height so many VMs don't push the page taller than the viewport.
+   RP/volume lists are shorter and grow with their content — relying
+   on .wizard-panel's min-height keeps the grid aligned. */
+.vm-list {
   max-height: 360px; overflow-y: auto;
 }
 .vm-item, .rp-item {

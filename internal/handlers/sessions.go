@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"net/http"
+
+	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
 )
 
 // handleSessionDelete deletes a FileRecoverySession and closes any
@@ -14,5 +16,11 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.pool.CloseAllForFRS(ns, name)
+	// Clear the wizard's watch-map entry too. If the user just
+	// cancelled a FRS that was created moments ago by the wizard,
+	// the background goroutine may still be polling WaitForReady;
+	// without this, the next /browse on a same-name FRS would
+	// briefly inherit the stale "Pending/Timeout" state.
+	s.watches.del(k8s.FRSRef{Namespace: ns, Name: name})
 	http.Redirect(w, r, "/sessions", http.StatusSeeOther)
 }
