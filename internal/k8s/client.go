@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
@@ -88,5 +89,16 @@ func buildRESTFor(c *Client) (rest.Interface, error) {
 			return nil, err
 		}
 	}
+	// RP /details issues raw GETs via rc.Get().AbsPath("/apis/...").
+	// Absolute paths don't need cfg.GroupVersion, but a couple of
+	// client-go paths still dereference it; set it to the apps.kio.kasten.io
+	// group so the REST client doesn't 502 on "GroupVersion is required".
+	cfg.GroupVersion = &schema.GroupVersion{Group: "apps.kio.kasten.io", Version: "v1alpha1"}
+	cfg.APIPath = "/apis"
+	// In-cluster setups already populate cfg.TLSClientConfig.CAFile
+	// from the service-account bundle at InClusterConfig time, so
+	// the apiserver's serving-cert is trusted. No extra wiring
+	// needed; the cfg is already a valid rest.Config that
+	// rest.RESTClientFor will accept.
 	return rest.RESTClientFor(cfg)
 }
