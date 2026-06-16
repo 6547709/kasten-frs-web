@@ -52,7 +52,7 @@ func newWizardTestServer(t *testing.T, stub *stubProvider) *Server {
 	a := auth.NewAuthenticator("u", "p",
 		auth.NewSessionStore([]byte("0123456789abcdef0123456789abcdef"), time.Hour), "kfrs_sid")
 	pool := sftpclient.NewPool(nil, time.Hour)
-	return New(a, pool, stub, "root", "ssh-ed25519 AAAA...", 2222, nil)
+	return New(a, pool, stub, "root", "ssh-ed25519 AAAA...", 2222, nil, 30*time.Second)
 }
 
 func TestHandleWizardPage_Renders(t *testing.T) {

@@ -64,7 +64,7 @@ func run() error {
 		auth.NewSessionStore(cfg.CookieSecret, cfg.SessionTTL), "kfrs_sid")
 	registry := metrics.NewRegistry()
 
-	hs := handlers.New(sessions, pool, kc, cfg.FRSDefaultUsername, string(km.PubKeyPEM), cfg.FRSPort, cfg.FRSNamespaceWhitelist)
+	hs := handlers.New(sessions, pool, kc, cfg.FRSDefaultUsername, string(km.PubKeyPEM), cfg.FRSPort, cfg.FRSNamespaceWhitelist, cfg.FRSWaitTimeout)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", registry.Handler())
 	mux.Handle("/", server.SecurityHeaders(server.Recoverer(hs.Router())))

@@ -129,13 +129,15 @@ type Server struct {
 	watches *watchMap
 	// frsTimeout bounds how long the wizard's ready-watcher
 	// goroutine will wait for an FRS to become Ready before
-	// marking it as Timeout in the watch map. Default 30s.
+	// marking it as Timeout in the watch map. Sourced from
+	// HELPER_FRS_WAIT_TIMEOUT in config; defaults to 30s.
 	frsTimeout time.Duration
 }
 
 // New builds a Server.
 func New(a *auth.Authenticator, pool *sftpclient.Pool, frs FRSProvider,
-	username, pubKeyPEM string, frsPort int, nsWhitelist []string) *Server {
+	username, pubKeyPEM string, frsPort int, nsWhitelist []string,
+	frsTimeout time.Duration) *Server {
 	s := &Server{
 		auth:        a,
 		pool:        pool,
@@ -147,7 +149,7 @@ func New(a *auth.Authenticator, pool *sftpclient.Pool, frs FRSProvider,
 		nsWhitelist: nsWhitelist,
 		logger:      slog.Default(),
 		watches:     &watchMap{m: make(map[k8s.FRSRef]*watchState)},
-		frsTimeout:  30 * time.Second,
+		frsTimeout:  frsTimeout,
 	}
 	s.routes()
 	return s
