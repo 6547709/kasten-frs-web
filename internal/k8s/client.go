@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
@@ -77,9 +78,11 @@ func (c *Client) Dynamic() dynamic.Interface { return c.dyn }
 // IsFake reports whether this client is backed by a fake clientset.
 func (c *Client) IsFake() bool { return c.isFake }
 
-// buildRESTFor returns a rest.Interface using the same in-cluster / kubeconfig
-// discovery as the dynamic client. Used for subresources the dynamic client
-// doesn't expose (like RestorePoint /details).
+// buildRESTFor returns a rest.Interface scoped to the apps.kio.kasten.io
+// group. Used for subresources the dynamic client doesn't expose
+// (like RestorePoint /details). Without the GroupVersion set, the
+// generated REST client would 502 with "GroupVersion is required when
+// initializing a RESTClient" on the first request.
 func buildRESTFor(c *Client) (rest.Interface, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -88,5 +91,7 @@ func buildRESTFor(c *Client) (rest.Interface, error) {
 			return nil, err
 		}
 	}
+	cfg.GroupVersion = &schema.GroupVersion{Group: "apps.kio.kasten.io", Version: "v1alpha1"}
+	cfg.APIPath = "/apis"
 	return rest.RESTClientFor(cfg)
 }
