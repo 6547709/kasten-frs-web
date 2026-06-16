@@ -21,14 +21,14 @@ type FRSRef struct {
 
 // FRSView is a denormalized, UI-ready view of a FileRecoverySession.
 type FRSView struct {
-	Ref             FRSRef
-	ServiceName     string
-	ServiceNS       string
-	Port            int64
-	HostKeySig      string
-	ExpiryTime      time.Time
-	State           string
-	CreatedAt       time.Time
+	Ref         FRSRef
+	ServiceName string
+	ServiceNS   string
+	Port        int64
+	HostKeySig  string
+	ExpiryTime  time.Time
+	State       string
+	CreatedAt   time.Time
 }
 
 // FRSGroupVersionResource is the GVR for FileRecoverySession.

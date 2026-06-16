@@ -170,7 +170,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /login", s.handleLoginPage)
 	s.mux.HandleFunc("POST /login", s.auth.HandleLogin)
 	s.mux.HandleFunc("POST /logout", s.handleLogout)
-	s.mux.HandleFunc("GET /logout", s.handleLogout)  // GET-friendly for plain <a> links
+	s.mux.HandleFunc("GET /logout", s.handleLogout) // GET-friendly for plain <a> links
 
 	// Serve embedded static assets (CSS, JS, images) under /static/.
 	// Without this, the browser would receive an HTML 404 for the
@@ -231,10 +231,10 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
-		"Title":         "活跃 FRS 会话",
-		"BodyTemplate":  "sessions_body",
-		"FRS":           frsList,
-		"User":          s.auth.Username,
+		"Title":        "活跃 FRS 会话",
+		"BodyTemplate": "sessions_body",
+		"FRS":          frsList,
+		"User":         s.auth.Username,
 	}); err != nil {
 		slog.Error("render sessions", "err", err)
 	}
@@ -326,12 +326,12 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
-		"Title":         "浏览 " + ref.Namespace + "/" + ref.Name,
-		"BodyTemplate":  "browse_body",
-		"FRS":           ref,
-		"Path":          path,
-		"Entries":       entries,
-		"User":          s.auth.Username,
+		"Title":        "浏览 " + ref.Namespace + "/" + ref.Name,
+		"BodyTemplate": "browse_body",
+		"FRS":          ref,
+		"Path":         path,
+		"Entries":      entries,
+		"User":         s.auth.Username,
 	}); err != nil {
 		slog.Error("render browse", "err", err)
 	}
@@ -640,4 +640,3 @@ func (s *Server) frsDelete(ctx context.Context, ns, name string) error {
 func (s *Server) frsWaitReady(ctx context.Context, ref k8s.FRSRef, timeout time.Duration) (k8s.FRSView, error) {
 	return s.frs.WaitForReady(ctx, ref.Namespace, ref.Name, timeout)
 }
-

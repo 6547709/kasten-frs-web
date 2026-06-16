@@ -15,8 +15,8 @@ type SessionKey struct {
 
 // poolEntry wraps a stored Session with usage timestamps.
 type poolEntry struct {
-	sess        *Session
-	lastUsedAt  time.Time
+	sess       *Session
+	lastUsedAt time.Time
 }
 
 // Pool stores SFTP sessions keyed by user+FRS, expiring idle entries.

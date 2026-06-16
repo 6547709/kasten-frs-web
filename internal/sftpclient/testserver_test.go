@@ -18,8 +18,8 @@ func TestStartSFTPTestServer(t *testing.T) {
 	host, port, _ := net.SplitHostPort(addr)
 
 	cfg := &ssh.ClientConfig{
-		User: "root",
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(ts.Signer())},
+		User:            "root",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(ts.Signer())},
 		HostKeyCallback: ssh.FixedHostKey(ts.HostKey()),
 	}
 	conn, err := ssh.Dial("tcp", net.JoinHostPort(host, port), cfg)

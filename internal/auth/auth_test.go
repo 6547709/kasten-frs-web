@@ -12,9 +12,9 @@ func newTestAuth(t *testing.T) *Authenticator {
 	t.Helper()
 	secret := make([]byte, 32)
 	return &Authenticator{
-		Username: "admin",
-		Password: "secret",
-		Sessions: NewSessionStore(secret, time.Hour),
+		Username:   "admin",
+		Password:   "secret",
+		Sessions:   NewSessionStore(secret, time.Hour),
 		CookieName: "kfrs_sid",
 	}
 }

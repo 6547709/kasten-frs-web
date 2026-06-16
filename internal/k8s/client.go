@@ -16,7 +16,7 @@ import (
 
 // ClientOptions configures NewClient.
 type ClientOptions struct {
-	InCluster bool
+	InCluster  bool
 	Kubeconfig string
 	Fake       bool
 }
