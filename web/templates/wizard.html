@@ -1,0 +1,132 @@
+{{define "wizard_body"}}<div class="wizard-stage">
+  <div class="workarea-title">恢复向导</div>
+  <div class="workarea-subtitle">选 VM → 选还原点 → 选 volume → 创建 FRS</div>
+
+  <div class="wizard-grid">
+    <section class="wizard-panel" id="panel-vms">
+      <div class="panel-title">第 1 步：选虚拟机</div>
+      <input type="search" id="vm-filter" placeholder="搜索 VM 名…" autocomplete="off">
+      <ul class="vm-list" id="vm-list">
+        {{template "wizard_vms_fragment" .}}
+      </ul>
+    </section>
+
+    <section class="wizard-panel" id="panel-rps">
+      <div class="panel-title">第 2 步：选还原点</div>
+      <div id="rp-list">
+        <p class="empty">从左侧选一个 VM</p>
+      </div>
+    </section>
+
+    <section class="wizard-panel" id="panel-vols">
+      <div class="panel-title">第 3 步：选 volume</div>
+      <div id="vol-list">
+        <p class="empty">从中间选一个还原点</p>
+      </div>
+    </section>
+  </div>
+
+  <form method="post" action="/wizard/create" class="wizard-create">
+    <input type="hidden" name="vmNs"   id="vm-ns">
+    <input type="hidden" name="vmName" id="vm-name">
+    <input type="hidden" name="rpName" id="rp-name">
+    <div id="pvc-fields"></div>
+    <button type="submit" id="wizard-submit" disabled>创建 FRS</button>
+  </form>
+</div>
+
+<script>
+(function(){
+  const $ = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+  const filter = $('#vm-filter');
+  if (filter) {
+    filter.addEventListener('input', () => {
+      const q = filter.value.toLowerCase();
+      $$('#vm-list li').forEach(li => {
+        const name = li.dataset.vmName || '';
+        li.style.display = name.toLowerCase().includes(q) ? '' : 'none';
+      });
+    });
+  }
+
+  document.body.addEventListener('click', e => {
+    const li = e.target.closest('#vm-list li');
+    if (!li) return;
+    $$('#vm-list li').forEach(x => x.classList.remove('selected'));
+    li.classList.add('selected');
+    const ns = li.dataset.vmNs, name = li.dataset.vmName;
+    $('#vm-ns').value = ns; $('#vm-name').value = name;
+    $('#rp-name').value = ''; $('#pvc-fields').innerHTML = '';
+    $('#wizard-submit').disabled = true;
+    htmx.ajax('GET', '/wizard/vms/'+encodeURIComponent(ns)+'/'+encodeURIComponent(name)+'/restorepoints', {target:'#rp-list', swap:'innerHTML'});
+  });
+
+  document.body.addEventListener('htmx:afterRequest', e => {
+    if (e.target.id === 'rp-list') {
+      $('#rp-list').addEventListener('click', e2 => {
+        const li = e2.target.closest('li');
+        if (!li) return;
+        $$('#rp-list li').forEach(x => x.classList.remove('selected'));
+        li.classList.add('selected');
+        const name = li.dataset.rpName;
+        $('#rp-name').value = name;
+        htmx.ajax('GET', '/wizard/rps/'+encodeURIComponent(li.dataset.rpNs)+'/'+encodeURIComponent(name)+'/details', {target:'#vol-list', swap:'innerHTML'});
+      }, {once: true});
+    }
+    if (e.target.id === 'vol-list') {
+      const any = $$('#vol-list input[name=pvcNames]').length > 0;
+      $('#wizard-submit').disabled = !any;
+      $$('#vol-list input[name=pvcNames]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          const checked = $$('#vol-list input[name=pvcNames]:checked').map(x => x.value);
+          $('#pvc-fields').innerHTML = checked.map(v => '<input type="hidden" name="pvcNames" value="'+v+'">').join('');
+        });
+      });
+    }
+  });
+})();
+</script>{{end}}
+
+{{define "wizard_vms_fragment"}}
+{{range .VMs}}
+<li class="vm-item" data-vm-name="{{.AppName}}" data-vm-ns="{{.AppNamespace}}">
+  <div class="vm-name"><strong>{{.AppName}}</strong></div>
+  <div class="vm-meta">
+    <span class="ns">{{.AppNamespace}}</span>
+    <span class="rp-count">{{.RPCount}} 个 RP</span>
+    {{if not .LastRPTime.IsZero}}<span class="last">最近 {{.LastRPTime.Format "2006-01-02 15:04"}}</span>{{end}}
+  </div>
+</li>
+{{else}}
+<li class="empty">暂无可恢复的 VM。确认 K10 有 <code>appType=virtualMachine</code> 的 RestorePoint。</li>
+{{end}}{{end}}
+
+{{define "wizard_rps_fragment"}}
+{{$vm := .VM}}
+{{range .RPs}}
+<li class="rp-item" data-rp-name="{{.Name}}" data-rp-ns="{{.Namespace}}">
+  <div class="rp-name"><strong>{{.Name}}</strong></div>
+  <div class="rp-meta">
+    <span class="badge {{.State | lower}}">{{.State}}</span>
+    <span class="time">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</span>
+  </div>
+</li>
+{{else}}
+<li class="empty">这个 VM 没有 Bound 的还原点。</li>
+{{end}}{{end}}
+
+{{define "wizard_vols_fragment"}}
+{{$rp := .RP}}
+<form id="vol-form">
+{{range .Vols}}
+<label class="vol-item">
+  <input type="checkbox" name="pvcNames" value="{{.PVCName}}" checked>
+  <span class="pvc-name">{{.PVCName}}</span>
+  {{if .Size}}<span class="size">{{.Size}}</span>{{end}}
+</label>
+{{else}}
+<p class="empty">这个还原点没有 PVC artifacts。</p>
+{{end}}
+</form>{{end}}
