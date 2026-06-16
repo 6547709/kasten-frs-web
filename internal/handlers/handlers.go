@@ -20,6 +20,7 @@ import (
 	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
 	"github.com/liguoqiang/kasten-frs-web/internal/sftpclient"
 	"github.com/liguoqiang/kasten-frs-web/web"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -108,6 +109,9 @@ type FRSProvider interface {
 	ListVMNamespaces(ctx context.Context) ([]string, error)
 	ListRestorePoints(ctx context.Context, ns, appName string) ([]k8s.RestorePoint, error)
 	GetRestorePointDetails(ctx context.Context, ns, name string) ([]k8s.VolumeArtifact, error)
+	CloneDataVolume(ctx context.Context, ns string, src k8s.DataVolumeSource) (*unstructured.Unstructured, error)
+	WaitDataVolumeSucceeded(ctx context.Context, ns, name string, timeout time.Duration) error
+	DeleteDataVolume(ctx context.Context, ns, name string) error
 	CreateFRS(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error)
 	DeleteFRS(ctx context.Context, ns, name string) error
 	WaitForReady(ctx context.Context, ns, name string, timeout time.Duration) (k8s.FRSView, error)
@@ -727,6 +731,18 @@ func (s *Server) frsListRPs(ctx context.Context, ns, appName string) ([]k8s.Rest
 
 func (s *Server) frsListVolumes(ctx context.Context, ns, name string) ([]k8s.VolumeArtifact, error) {
 	return s.frs.GetRestorePointDetails(ctx, ns, name)
+}
+
+func (s *Server) frsCloneDataVolume(ctx context.Context, ns string, src k8s.DataVolumeSource) (*unstructured.Unstructured, error) {
+	return s.frs.CloneDataVolume(ctx, ns, src)
+}
+
+func (s *Server) frsWaitDataVolume(ctx context.Context, ns, name string, timeout time.Duration) error {
+	return s.frs.WaitDataVolumeSucceeded(ctx, ns, name, timeout)
+}
+
+func (s *Server) frsDeleteDataVolume(ctx context.Context, ns, name string) error {
+	return s.frs.DeleteDataVolume(ctx, ns, name)
 }
 
 func (s *Server) frsGet(ctx context.Context, ref k8s.FRSRef) (k8s.FRSView, error) {

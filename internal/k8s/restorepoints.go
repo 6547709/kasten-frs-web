@@ -36,9 +36,14 @@ type RestorePoint struct {
 }
 
 // VolumeArtifact is a PVC exposed via the RestorePoint /details subresource.
+// PVCNamespace and StorageClass are populated when the nested-meta
+// schema carries them; they're used by the wizard to issue a
+// DataVolume clone that K10's datamover can find a snapshot for.
 type VolumeArtifact struct {
-	PVCName string
-	Size    string
+	PVCName      string
+	PVCNamespace string
+	Size         string
+	StorageClass string
 }
 
 // ListVMs returns all VMs discovered via appType=virtualMachine RPs,
@@ -207,8 +212,35 @@ func parseDetailsPVCs(body []byte) ([]VolumeArtifact, error) {
 			if spec, ok := meta["spec"].(map[string]any); ok {
 				if res, _ := spec["resource"].(string); res == "persistentvolumeclaims" {
 					name, _ := spec["name"].(string)
+					pvcNs, _ := spec["namespace"].(string)
 					size, _ := m["occupiedSize"].(string)
-					out = append(out, VolumeArtifact{PVCName: name, Size: size})
+					// meta.spec.config is a JSON-stringified copy of
+					// the live PVC spec; pull storageClassName +
+					// resources.requests.storage from it so the
+					// wizard can issue a matching DataVolume clone.
+					var storageClass, pvcSize string
+					if cfgStr, _ := spec["config"].(string); cfgStr != "" {
+						var cfg map[string]any
+						if json.Unmarshal([]byte(cfgStr), &cfg) == nil {
+							storageClass, _ = cfg["spec"].(map[string]any)["storageClassName"].(string)
+							if res, ok := cfg["spec"].(map[string]any)["resources"].(map[string]any); ok {
+								if req, ok := res["requests"].(map[string]any); ok {
+									if v, ok := req["storage"].(string); ok {
+										pvcSize = v
+									}
+								}
+							}
+						}
+					}
+					if size == "" {
+						size = pvcSize
+					}
+					out = append(out, VolumeArtifact{
+						PVCName:      name,
+						PVCNamespace: pvcNs,
+						Size:         size,
+						StorageClass: storageClass,
+					})
 				}
 			}
 		}
