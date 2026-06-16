@@ -111,9 +111,19 @@
         if (filter) filter.value = '';
         const list = $('#vm-list');
         if (!list) return;
-        list.setAttribute('hx-get', ns ? '/wizard/vms?ns=' + encodeURIComponent(ns) : '/wizard/vms');
         list.innerHTML = '<li class="empty">载入中…</li>';
-        if (window.htmx) htmx.trigger(list, 'load');
+        // htmx 1.x's hx-trigger="load" fires only once. Re-setting
+        // hx-get via setAttribute then re-triggering 'load' is fragile
+        // — the safer path is to issue a direct htmx.ajax and let it
+        // swap into the same target with innerHTML.
+        const url = ns ? '/wizard/vms?ns=' + encodeURIComponent(ns) : '/wizard/vms';
+        if (window.htmx) {
+          htmx.ajax('GET', url, { target: '#vm-list', swap: 'innerHTML' });
+        } else {
+          // Fallback for tests or js-disabled environments — at least
+          // navigate the browser to a URL that renders the right list.
+          window.location.href = '/wizard?ns=' + encodeURIComponent(ns);
+        }
       });
     }
 
@@ -142,6 +152,27 @@
     // us remove the old binding before adding the new one — without
     // that, a single click would fire N handlers from accumulated
     // previous renders.
+
+    // Single source of truth for "should the wizard-submit be
+    // enabled?". Called after every vol-list swap and on every
+    // checkbox change. Avoids the previous bug where the disabled
+    // flag was set once after htmx:afterRequest and then never
+    // updated when the user toggled checkboxes.
+    function enableSubmitIfVolumesPresent() {
+      const submit = $('#wizard-submit');
+      const pvcFields = $('#pvc-fields');
+      if (!submit) return;
+      const cbs = $$('#vol-list input[name=pvcNames]');
+      const checked = cbs.filter(function (x) { return x.checked; });
+      submit.disabled = checked.length === 0;
+      if (pvcFields) {
+        pvcFields.innerHTML = checked.map(function (v) {
+          return '<input type="hidden" name="pvcNames" value="' + v.value + '">';
+        }).join('');
+      }
+    }
+    window.__kfrsRefreshVolumes = enableSubmitIfVolumesPresent;
+
     function bindRpClick(list) {
       const handler = function (e2) {
         const li = e2.target.closest('li');
@@ -163,6 +194,20 @@
     const rpList = $('#rp-list');
     if (rpList) bindRpClick(rpList);
 
+    // Delegated change listener on #vol-list: every checkbox the user
+    // toggles should refresh the hidden pvcNames mirror + submit
+    // disabled flag. Because htmx swaps innerHTML on #vol-list, the
+    // checkboxes themselves are new each time, so a delegated listener
+    // on the stable parent is the only reliable hook.
+    const volList = $('#vol-list');
+    if (volList) {
+      volList.addEventListener('change', function (ev) {
+        if (ev && ev.target && ev.target.name === 'pvcNames') {
+          enableSubmitIfVolumesPresent();
+        }
+      });
+    }
+
     document.body.addEventListener('htmx:afterRequest', function (e) {
       if (e.target.id === 'vm-list') {
         if (typeof window.__kfrsApplyFilter === 'function') window.__kfrsApplyFilter();
@@ -174,20 +219,7 @@
         bindRpClick(e.target);
       }
       if (e.target.id === 'vol-list') {
-        const submit = $('#wizard-submit');
-        const pvcFields = $('#pvc-fields');
-        const any = $$('#vol-list input[name=pvcNames]').length > 0;
-        if (submit) submit.disabled = !any;
-        $$('#vol-list input[name=pvcNames]').forEach(function (cb) {
-          cb.addEventListener('change', function () {
-            const checked = $$('#vol-list input[name=pvcNames]:checked').map(function (x) { return x.value; });
-            if (pvcFields) {
-              pvcFields.innerHTML = checked.map(function (v) {
-                return '<input type="hidden" name="pvcNames" value="' + v + '">';
-              }).join('');
-            }
-          });
-        });
+        enableSubmitIfVolumesPresent();
       }
     });
   }

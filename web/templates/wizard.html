@@ -81,7 +81,7 @@
 
 {{define "wizard_vols_fragment"}}
 {{$rp := .RP}}
-<form id="vol-form">
+<div id="vol-list-inner">
 {{range .Vols}}
 <label class="vol-item">
   <input type="checkbox" name="pvcNames" value="{{.PVCName}}" checked>
@@ -91,4 +91,4 @@
 {{else}}
 <p class="empty">这个还原点没有 PVC artifacts。</p>
 {{end}}
-</form>{{end}}
+</div>{{end}}
