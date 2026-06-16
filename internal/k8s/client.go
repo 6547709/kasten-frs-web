@@ -76,3 +76,17 @@ func (c *Client) Dynamic() dynamic.Interface { return c.dyn }
 
 // IsFake reports whether this client is backed by a fake clientset.
 func (c *Client) IsFake() bool { return c.isFake }
+
+// buildRESTFor returns a rest.Interface using the same in-cluster / kubeconfig
+// discovery as the dynamic client. Used for subresources the dynamic client
+// doesn't expose (like RestorePoint /details).
+func buildRESTFor(c *Client) (rest.Interface, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		cfg, err = clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rest.RESTClientFor(cfg)
+}
