@@ -204,19 +204,25 @@ step3b_rbac_can_i() {
     # `oc auth can-i` takes `verb resource [resourceName]` and impersonates
     # the SA via --as=system:serviceaccount:NS:NAME (not `-n ns sa/name`,
     # which is the `oc get` syntax and confuses `oc auth can-i`).
+    # Note: the secret Role is `resourceNames`-restricted to
+    # `kasten-frs-helper-private-key` only, so the verb/resource checks
+    # below MUST pass the resourceName as a 3rd token or they'll ask
+    # "can the SA write ANY secret" (which is no, by design).
     SA="system:serviceaccount:kasten-io:kasten-frs-web-helper"
     NS_FOR_SA="kasten-io"
+    SECRET_NAME="kasten-frs-helper-private-key"
     for v in \
         "create filerecoverysessions.datamover.kio.kasten.io" \
         "delete filerecoverysessions.datamover.kio.kasten.io" \
         "list  restorepoints.apps.kio.kasten.io" \
         "get   restorepoints.apps.kio.kasten.io" \
-        "get   restorepoints.details.apps.kio.kasten.io" \
-        "create secret" \
-        "update secret" \
-        "patch  secret"; do
-        # $v unquoted on purpose: each entry is 2-3 whitespace-separated tokens
-        # (verb + resource [+ resourceName]); $SA/$NS_FOR_SA quoted to keep them atomic.
+        "get   restorepoints/details" \
+        "create secret/${SECRET_NAME}" \
+        "update secret/${SECRET_NAME}" \
+        "patch  secret/${SECRET_NAME}"; do
+        # $v unquoted on purpose: each entry is 3-4 whitespace-separated
+        # tokens (verb + resource [+ subresource] [+ resourceName]); quoted
+        # vars are atomic.
         # shellcheck disable=SC2086
         if ! oc auth can-i $v --as="$SA" -n "$NS_FOR_SA"; then
             die "RBAC missing: SA cannot $v (as $SA in $NS_FOR_SA)"
@@ -344,13 +350,22 @@ step4_wait_probe() {
     oc -n "$NS" wait --for=condition=Ready pod -l "$DEPLOY_LABEL" \
         --timeout=180s >>"$LOG_FILE" 2>&1 \
         || die "pod did not become Ready within 180s"
+    # A new image tag (e.g. v0.3.0 → v0.3.1) triggers a rolling deploy;
+    # `oc wait` will see both old and new pods become Ready as the
+    # replicaset is created and the old pod is killed. Picking by
+    # sort order (alphabetical) can return a pod that has since been
+    # terminated, causing `oc exec` to fail with "container not
+    # found". Filter to Running pods and pick the one with the
+    # newest creationTimestamp to be deterministic.
     POD=$(oc -n "$NS" get pod -l "$DEPLOY_LABEL" \
-        -o jsonpath='{.items[0].metadata.name}')
-    [ -n "$POD" ] || die "no pod found for label $DEPLOY_LABEL"
+        --field-selector=status.phase=Running \
+        --sort-by=.metadata.creationTimestamp \
+        -o jsonpath='{.items[-1:].metadata.name}')
+    [ -n "$POD" ] || die "no Running pod found for label $DEPLOY_LABEL"
     oc -n "$NS" exec "$POD" -- curl -fsS http://127.0.0.1:8080/healthz >>"$LOG_FILE" 2>&1 \
-        || die "/healthz probe failed"
+        || die "/healthz probe failed (pod=$POD)"
     oc -n "$NS" exec "$POD" -- curl -fsS http://127.0.0.1:8080/readyz >>"$LOG_FILE" 2>&1 \
-        || die "/readyz probe failed"
+        || die "/readyz probe failed (pod=$POD)"
     ok "pod $POD ready; /healthz and /readyz OK"
 }
 
