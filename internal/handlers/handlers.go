@@ -108,6 +108,7 @@ type Server struct {
 	frs         FRSProvider
 	mux         *http.ServeMux
 	username    string
+	pubKeyPEM   string
 	frsPort     int
 	nsWhitelist []string
 	logger      *slog.Logger
@@ -115,13 +116,14 @@ type Server struct {
 
 // New builds a Server.
 func New(a *auth.Authenticator, pool *sftpclient.Pool, frs FRSProvider,
-	username string, frsPort int, nsWhitelist []string) *Server {
+	username, pubKeyPEM string, frsPort int, nsWhitelist []string) *Server {
 	s := &Server{
 		auth:        a,
 		pool:        pool,
 		frs:         frs,
 		mux:         http.NewServeMux(),
 		username:    username,
+		pubKeyPEM:   pubKeyPEM,
 		frsPort:     frsPort,
 		nsWhitelist: nsWhitelist,
 		logger:      slog.Default(),
