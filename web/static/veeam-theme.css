@@ -598,6 +598,16 @@ button.danger:hover { background: #D03030; }
   background: #E1F0FF; border-color: #6FA8DC;
 }
 .vm-meta, .rp-meta { font-size: 11px; color: #6B7480; }
+.vm-count {
+  font-size: 11px; color: #6B7480; text-align: right;
+  padding: 4px 2px 0; border-top: 1px solid #E5E8EB; margin-top: 4px;
+}
+#vm-filter {
+  width: 100%; box-sizing: border-box;
+  padding: 4px 6px; margin-bottom: 6px;
+  border: 1px solid #C9D0D8; border-radius: 3px;
+  font-size: 12px;
+}
 .wizard-create {
   background: #fff;
   padding: 12px;
