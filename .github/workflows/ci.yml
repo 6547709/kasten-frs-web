@@ -78,7 +78,13 @@ jobs:
           # pod` shows. github.ref_name on a vX.Y.Z push is "vX.Y.Z";
           # the binary prints that verbatim, matching the ghcr tag.
           build-args: VERSION=${{ github.ref_name }}
-          cache-from: type=gha
+          # Skip GHA cache on tag builds: an older v0.3.2 image was
+          # cached with VERSION=dev because the ENV never propagated
+          # from build stage to runtime stage, and the cache hit
+          # served that stale layer back even after the Dockerfile fix.
+          # Disabling cache-from forces a fresh build; cache-to still
+          # saves it for future main-push runs.
+          cache-from: ""
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
