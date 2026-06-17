@@ -22,6 +22,21 @@ key never leaves the helper pod.
 oc apply -k deploy/
 ```
 
+The image is pinned centrally in `deploy/kustomization.yaml`
+(`images:` → `newTag`). Bump that tag — or set `newName` to a private
+registry mirror — to roll out a specific release. The tag baked into
+`20-deployment.yaml` is only the fallback for a plain
+`oc apply -f deploy/20-deployment.yaml` without kustomize.
+
+> **RBAC note (first boot):** the helper auto-creates its SSH-key
+> Secret on first start. Kubernetes does not honour `resourceNames`
+> for the `create` verb (the object name doesn't exist yet at
+> admission), so the `create` grant on Secrets in `06-rbac.yaml` is
+> intentionally namespace-scoped and unscoped by name. `get/update/patch`
+> remain restricted to the single `kasten-frs-helper-private-key`
+> Secret. Do not re-add `resourceNames` to the `create` rule or the
+> helper will crash-loop with `secrets is forbidden: cannot create`.
+
 ## Required NetworkPolicy for FRS dial
 
 The K10 datamover controller creates a per-FRS `NetworkPolicy` whose
@@ -149,3 +164,15 @@ After the helper pod is Ready, log in via the Route and navigate to
 `virtualMachine`-labelled RestorePoint). Pick a VM, then a Bound RP,
 then any volume, and click **Create FRS**. You should be redirected
 to `/browse` showing the FRS directory tree within 30 seconds.
+
+## Cleaning up Failed / leftover FRSes
+
+The Sessions page lists **every** FRS in the cluster (subject to the
+optional `HELPER_FRS_NAMESPACES` allow-list), including ones in a
+terminal state. When an FRS times out it transitions to `Failed` and
+K10 tears down its `frs-xxx` pod, but the FRS custom resource lingers.
+These rows show a disabled **Unavailable** button and an enabled
+**Delete** button — click Delete to remove the leftover CR. The
+ClusterRole already grants `delete` on `filerecoverysessions`, so no
+extra RBAC is needed. Confirmation now uses an in-app dialog (no
+browser `window.confirm` popup).

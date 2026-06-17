@@ -3,6 +3,13 @@ kind: Kustomization
 namespace: kasten-io
 commonLabels:
   app: kasten-frs-web-helper
+# Pin the image centrally so `oc apply -k deploy/` always rolls out a
+# known release instead of whatever tag is baked into 20-deployment.yaml
+# (which was stuck at v0.1.0). Override newTag — and newName for a
+# private registry mirror — here at deploy time.
+images:
+- name: ghcr.io/6547709/kasten-frs-web
+  newTag: v0.3.27
 resources:
 - 05-serviceaccount.yaml
 - 06-rbac.yaml

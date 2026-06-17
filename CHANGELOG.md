@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.28 (2026-06-17)
+
+UX + deployment hardening:
+
+- ui: replace browser-native `window.confirm` with an in-app, theme-
+  matched confirmation modal (animated, focus-managed, Esc=cancel /
+  Enter=confirm, backdrop-click cancels). Applies to all
+  `confirm-delete` forms (sessions + browse delete).
+- deploy: **fix image repo** — manifests pointed at the stale
+  `ghcr.io/liguoqiang/...:v0.1.0`; CI publishes to
+  `ghcr.io/6547709/kasten-frs-web`. Pinned to `v0.3.27` centrally via
+  kustomize `images:` and in the deployment fallback. (Was a guaranteed
+  ImagePullBackOff / stale-version deploy.)
+- deploy: **fix RBAC** — the Secret `create` grant was scoped by
+  `resourceNames`, which Kubernetes ignores for `create`, so the
+  helper's first-boot SSH-key Secret creation was unauthorized. Split
+  into an unscoped `create` rule + name-scoped `get/update/patch`.
+- docs: DEPLOY.md documents the image pin, the RBAC subtlety, and the
+  Failed-FRS cleanup flow.
+
 ## 0.3.27 (2026-06-17)
 
 - sessions: list ALL FileRecoverySessions, including Failed / Succeeded
