@@ -208,8 +208,16 @@ func (s *Server) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) watchFRSCreated(ref k8s.FRSRef, initial k8s.FRSView) {
 	timeout := s.frsTimeout
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = 120 * time.Second
 	}
+	s.watchFRSCreatedWithTimeout(ref, initial, timeout)
+}
+
+// watchFRSCreatedWithTimeout is the worker behind both the initial
+// wizard create and the "Wait longer" extend button. It loops
+// WaitForReady for the given window and writes a terminal state
+// into the watch map.
+func (s *Server) watchFRSCreatedWithTimeout(ref k8s.FRSRef, initial k8s.FRSView, timeout time.Duration) {
 	v, err := s.frsWaitReady(context.Background(), ref, timeout)
 	state := &watchState{View: v, Done: true}
 	if err != nil {
@@ -222,6 +230,7 @@ func (s *Server) watchFRSCreated(ref k8s.FRSRef, initial k8s.FRSView) {
 		slog.Warn("frs.wait.terminal",
 			"frs", ref.Namespace+"/"+ref.Name,
 			"state", state.State,
+			"timeout", timeout,
 			"err", err,
 		)
 	} else {
@@ -230,6 +239,7 @@ func (s *Server) watchFRSCreated(ref k8s.FRSRef, initial k8s.FRSView) {
 			"frs", ref.Namespace+"/"+ref.Name,
 			"port", v.Port,
 			"service", v.ServiceName+"."+v.ServiceNS+".svc.cluster.local",
+			"timeout", timeout,
 		)
 	}
 	s.watches.set(ref, state)

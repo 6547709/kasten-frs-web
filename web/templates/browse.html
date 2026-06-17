@@ -72,12 +72,13 @@
   </form>
   <form method="post" action="/browse/extend" style="display:inline">
     <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
-    <button type="submit">Wait 30s more</button>
+    <input type="hidden" name="sec" value="60">
+    <button type="submit">Wait 60s more</button>
   </form>
-  <!-- Polls /browse?partial=ready every 2s. While the FRS isn't Ready
+  <!-- Polls /browse?partial=ready every 3s. While the FRS isn't Ready
        yet, the handler returns 204 No Content + HX-Redirect on Ready
        (full reload) or the preparing block on terminal state. -->
   <div hx-get="/browse?frs={{.FRS.Namespace}}/{{.FRS.Name}}&path=/&partial=ready"
-       hx-trigger="every 2s" hx-swap="innerHTML" hx-target="closest .browse-preparing"></div>
+       hx-trigger="every 3s" hx-swap="innerHTML" hx-target="closest .browse-preparing"></div>
 </div>
 {{end}}

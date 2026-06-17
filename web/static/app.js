@@ -28,13 +28,13 @@
     if (window.__kfrsCountdown) return;
     window.__kfrsCountdown = true;
     function fmt(ms) {
-      if (ms < 0) return '已过期';
+      if (ms < 0) return 'expired';
       const s = Math.floor(ms / 1000);
       const d = Math.floor(s / 86400),
         h = Math.floor((s % 86400) / 3600),
         m = Math.floor((s % 3600) / 60);
-      if (d > 0) return '剩 ' + d + 'd ' + (h < 10 ? '0' : '') + h + 'h';
-      return '剩 ' + (h < 10 ? '0' : '') + h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
+      if (d > 0) return d + 'd ' + (h < 10 ? '0' : '') + h + 'h left';
+      return (h < 10 ? '0' : '') + h + 'h ' + (m < 10 ? '0' : '') + m + 'm left';
     }
     function tick() {
       const now = Date.now();
@@ -43,7 +43,7 @@
         const ms = t - now;
         const span = el.querySelector('.exp-text');
         if (!span) return;
-        if (ms < 0) { el.className = 'badge crit'; span.textContent = '已过期'; return; }
+        if (ms < 0) { el.className = 'badge crit'; span.textContent = 'expired'; return; }
         if (ms < 15 * 60 * 1000) el.className = 'badge crit';
         else if (ms < 60 * 60 * 1000) el.className = 'badge warn';
         else el.className = 'badge';
@@ -86,7 +86,7 @@
         if (hit) visible++;
       });
       const c = $('#vm-count');
-      if (c) c.textContent = visible + ' / ' + $$('#vm-list li[data-vm-name]').length + ' 个 VM';
+      if (c) c.textContent = visible + ' / ' + $$('#vm-list li[data-vm-name]').length + ' VMs';
     }
     window.__kfrsApplyFilter = applyFilter;
 
@@ -106,12 +106,12 @@
         if (rpName) rpName.value = '';
         if (pvcFields) pvcFields.innerHTML = '';
         if (submit) submit.disabled = true;
-        if (rpList) rpList.innerHTML = '<p class="empty">从左侧选一个 VM</p>';
-        if (volList) volList.innerHTML = '<p class="empty">从中间选一个还原点</p>';
+        if (rpList) rpList.innerHTML = '<p class="empty">Select a VM on the left</p>';
+        if (volList) volList.innerHTML = '<p class="empty">Select a RestorePoint in the middle column</p>';
         if (filter) filter.value = '';
         const list = $('#vm-list');
         if (!list) return;
-        list.innerHTML = '<li class="empty">载入中…</li>';
+        list.innerHTML = '<li class="empty">Loading…</li>';
         // htmx 1.x's hx-trigger="load" fires only once. Re-setting
         // hx-get via setAttribute then re-triggering 'load' is fragile
         // — the safer path is to issue a direct htmx.ajax and let it

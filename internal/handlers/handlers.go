@@ -27,10 +27,10 @@ import (
 // layout.html defines the layout template; sessions.html / browse.html
 // each define a `*_body` template that layout.html includes via an
 // if-eq dispatch on .BodyTemplate. Earlier versions of this handler
-// used inline `sessionsTmpl` / `browseTmpl` string constants which
-// omitted the layout, the per-entry "进入" / "下载" links, and the
-// styling. We load the canonical templates here so the on-disk HTML
-// in web/templates/ is the single source of truth.
+// used inline `sessionsTmpl` / `browseTmpl` string constants that
+// omitted the layout and the styling. We load the canonical templates
+// here so the on-disk HTML in web/templates/ is the single source
+// of truth.
 var pageTemplates = template.Must(
 	template.New("").Funcs(template.FuncMap{
 		"splitPath":     splitPath,
@@ -306,11 +306,11 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// partial=ready is the polling endpoint used by the "FRS 正在
-	// 准备" page. Resolve it BEFORE any other branch so renderPreparing
+	// partial=ready is the polling endpoint used by the "FRS Preparing"
+	// page. Resolve it BEFORE any other branch so renderPreparing
 	// / renderError can't accidentally return a full <html> document
 	// that htmx would then inject into the preparing wrapper and
-	// stack one full layout per poll (the "屏幕套屏幕" bug).
+	// stack one full layout per poll (the screen-in-screen bug).
 	if r.URL.Query().Get("partial") == "ready" {
 		s.handlePartialReady(w, r, ref, path)
 		return
@@ -379,16 +379,38 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 // Returns a fragment suitable for hx-swap="innerHTML" against the
 // preparing wrapper. Critical: NEVER return a full layout here,
 // otherwise htmx injects the whole <html> into the wrapper and
-// the next poll wraps it in another layer ("屏幕套屏幕").
+// the next poll wraps it in another layer (screen-in-screen).
 // Behaviour:
 //   Ready         -> 204 No Content + HX-Redirect. The browser
 //                     follows the redirect to /browse, which
 //                     renders the proper page from scratch.
 //   NotReady      -> 204 No Content (poll again in 2s).
-//   Failed/Timeout -> 200 + renderPreparing so the user sees
-//                     the terminal failure inline.
+//   Failed/Timeout -> 200 + the preparing body fragment (no
+//                     layout) so the wrapper can swap it in
+//                     without nesting.
+//
+// If the request did NOT come from htmx (no HX-Request header —
+// e.g. user typed the URL in the address bar, or back/forward
+// navigation), fall back to the full page render instead of
+// returning 204 to a non-htmx browser (which would render as a
+// blank page).
 func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref k8s.FRSRef, path string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	htmxRequest := r.Header.Get("HX-Request") == "true"
+	notReady := func() {
+		if htmxRequest {
+			// keep-polling: empty body, no swap
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		// Direct browser navigation: render the preparing page
+		// so the user sees something instead of a blank 204.
+		ws, ok := s.watches.get(ref)
+		if !ok {
+			ws = &watchState{State: "Pending", View: k8s.FRSView{Ref: ref}}
+		}
+		s.renderPreparing(w, ref, ws)
+	}
 	if ws, ok := s.watches.get(ref); ok {
 		switch ws.State {
 		case "Ready":
@@ -398,7 +420,7 @@ func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref 
 			return
 		case "Failed", "Timeout":
 			slog.Info("frs.partial.terminal", "frs", ref.Namespace+"/"+ref.Name, "state", ws.State)
-			s.renderPreparing(w, ref, ws)
+			s.renderPreparingBody(w, ref, ws)
 			return
 		}
 	}
@@ -408,7 +430,7 @@ func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref 
 	view, err := s.frsGet(r.Context(), ref)
 	if err != nil {
 		slog.Warn("frs.partial.query", "frs", ref.Namespace+"/"+ref.Name, "err", err)
-		w.WriteHeader(http.StatusNoContent)
+		notReady()
 		return
 	}
 	switch view.State {
@@ -417,9 +439,9 @@ func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref 
 		w.Header().Set("HX-Redirect", "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path="+url.QueryEscape(path))
 		w.WriteHeader(http.StatusNoContent)
 	case "Failed":
-		s.renderPreparing(w, ref, &watchState{State: "Failed", View: view, Done: true})
+		s.renderPreparingBody(w, ref, &watchState{State: "Failed", View: view, Done: true})
 	default:
-		w.WriteHeader(http.StatusNoContent)
+		notReady()
 	}
 }
 
@@ -438,6 +460,23 @@ func (s *Server) renderPreparing(w http.ResponseWriter, ref k8s.FRSRef, ws *watc
 	}
 }
 
+// renderPreparingBody writes JUST the <div class="browse-preparing">
+// fragment, with no layout chrome. Used by the partial=ready poll
+// when the FRS reaches a terminal Failed/Timeout state: htmx
+// innerHTML-swaps it into the existing wrapper without ever
+// nesting a full <html> inside the page (the screen-in-screen
+// regression that the full-page renderPreparing would cause here).
+func (s *Server) renderPreparingBody(w http.ResponseWriter, ref k8s.FRSRef, ws *watchState) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := pageTemplates.ExecuteTemplate(w, "browse_preparing_body", map[string]any{
+		"FRS":   ref,
+		"State": ws.State,
+		"Error": errString(ws.Err),
+	}); err != nil {
+		slog.Error("render preparing body", "err", err)
+	}
+}
+
 func errString(e error) string {
 	if e == nil {
 		return ""
@@ -445,13 +484,15 @@ func errString(e error) string {
 	return e.Error()
 }
 
-// handleBrowseExtend is the "再等 30 秒" button on the preparing
+// handleBrowseExtend is the "Wait longer" button on the preparing
 // page. Per spec §9 + §15, when WaitForReady times out the user
-// must be able to extend the wait by another 30s instead of giving
-// up. We update the watch map to a fresh Pending state with the
-// current FRS view, then start a new watchFRSCreated goroutine
-// that polls WaitForReady with the configured timeout. The
-// browser is 303-redirected back to /browse where it will see
+// must be able to extend the wait instead of giving up. The
+// optional "sec" form field selects the new wait window (default
+// 60s); the form passes it so the button label matches the actual
+// wait time. We update the watch map to a fresh Pending state
+// with the current FRS view, then start a new watchFRSCreated
+// goroutine that polls WaitForReady with the requested timeout.
+// The browser is 303-redirected back to /browse where it will see
 // the new Pending state.
 func (s *Server) handleBrowseExtend(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
@@ -465,6 +506,19 @@ func (s *Server) handleBrowseExtend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ref := k8s.FRSRef{Namespace: parts[0], Name: parts[1]}
+	// Parse the requested extend window. Falls back to the server's
+	// configured frsTimeout, then 60s. The form's "sec" param lets
+	// the button advertise exactly how long the user is asking to
+	// wait ("Wait 60s more" → sec=60).
+	extend := s.frsTimeout
+	if extend == 0 {
+		extend = 60 * time.Second
+	}
+	if secStr := r.FormValue("sec"); secStr != "" {
+		if sec, err := strconv.Atoi(secStr); err == nil && sec > 0 && sec <= 600 {
+			extend = time.Duration(sec) * time.Second
+		}
+	}
 	// Fetch the current FRS view to seed the watch map with a sensible initial.
 	v, err := s.frsGet(r.Context(), ref)
 	if err != nil {
@@ -472,7 +526,7 @@ func (s *Server) handleBrowseExtend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.watches.set(ref, &watchState{State: "Pending", View: v})
-	go s.watchFRSCreated(ref, v)
+	go s.watchFRSCreatedWithTimeout(ref, v, extend)
 	http.Redirect(w, r, "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path=/", http.StatusSeeOther)
 }
 

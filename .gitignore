@@ -5,3 +5,9 @@ coverage.out
 .vscode/
 web/static/htmx.min.js
 .kfrs-overlay-*/
+
+# Local K10 / FRS SSH keys (used during manual testing; never commit
+# private keys). k10_frs is the private key; k10_frs.pub is the
+# matching public key. Both stay local.
+k10_frs
+k10_frs.pub

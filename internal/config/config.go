@@ -76,7 +76,7 @@ func Load() (Config, error) {
 	}
 	c.SFTPConnectTimeout = connectTimeout
 
-	wait, err := time.ParseDuration(getenv("HELPER_FRS_WAIT_TIMEOUT", "30s"))
+	wait, err := time.ParseDuration(getenv("HELPER_FRS_WAIT_TIMEOUT", "120s"))
 	if err != nil {
 		return Config{}, fmt.Errorf("HELPER_FRS_WAIT_TIMEOUT: %w", err)
 	}
