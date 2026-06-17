@@ -224,6 +224,100 @@ the next start. **All in-flight FRSes will lose SFTP access** —
 the FRSes still exist but the helper can't auth to them. Delete
 the stale FRSes and recreate via the wizard.
 
+### 3.1 Optional: pre-create the keypair manually
+
+🟢 **Optional.** Skip this section for a normal first install —
+the helper will auto-generate the keypair on first start. Read
+this section only if any of the following apply:
+
+- The helper's ServiceAccount is **not allowed to `create`
+  Secrets** in `kasten-io` (e.g. you hardened RBAC after install).
+- You operate an **air-gapped / pre-baked** cluster where the
+  helper pod cannot reach the API server on first start (see
+  troubleshooting row "helper cannot reach the API server" in §9).
+- You want a **single shared key** across multiple helper
+  replicas (the current Deployment runs 1 replica, so this is
+  rarely needed — if you scale up, all replicas must use the
+  same key).
+- You want to **inject an existing key** you generated
+  out-of-band (e.g. from your secrets manager).
+
+#### 3.1.1 Generate the keypair
+
+Run on any host with `ssh-keygen`:
+
+```bash
+ssh-keygen -t ed25519 -N '' -f kasten-frs-helper -C kasten-frs-web-helper
+# kasten-frs-helper       <- private key
+# kasten-frs-helper.pub   <- public key
+```
+
+The helper accepts any ed25519 / RSA key — ed25519 is recommended
+for size. **Do not set a passphrase** (`-N ''`): the helper would
+not be able to use the key unattended.
+
+#### 3.1.2 Create the Secret
+
+Encode both halves and create a `kubernetes.io/ssh-auth` Secret
+in the helper namespace:
+
+```bash
+NS=kasten-io                                # helper namespace
+NAME=kasten-frs-helper-private-key          # secret name (default)
+PRIV=$(base64 -w0 kasten-frs-helper)        # base64 of private key
+PUB=$(base64 -w0  kasten-frs-helper.pub)    # base64 of public key
+
+oc -n $NS create secret generic $NAME \
+  --type=kubernetes.io/ssh-auth \
+  --from-file=ssh-privatekey=kasten-frs-helper \
+  --from-file=ssh-publickey=kasten-frs-helper.pub
+```
+
+> `--type=kubernetes.io/ssh-auth` is cosmetic for our helper (we
+> read the data fields directly), but it documents intent and
+> matches what the helper would create on its own.
+
+Verify the data fields landed correctly:
+
+```bash
+oc -n $NS get secret $NAME -o jsonpath='{.data.ssh-privatekey}' | base64 -d
+# -----BEGIN OPENSSH PRIVATE KEY-----
+# ...
+oc -n $NS get secret $NAME -o jsonpath='{.data.ssh-publickey}'  | base64 -d
+# ssh-ed25519 AAAA… kasten-frs-web-helper
+```
+
+#### 3.1.3 What changes after the Secret is pre-created
+
+The helper's first-boot `LoadOrGenerate` path will:
+
+1. `secrets.Get` → succeeds (the Secret is already there).
+2. Both `ssh-privatekey` and `ssh-publickey` are present → branch
+   into `parseInto`, **no Secret `create` is attempted**.
+3. The helper comes up using the key you supplied.
+
+This means the helper no longer needs the Secret `create`
+permission. You can **remove the `create` rule from
+`06-rbac.yaml`** if your security team prefers to lock it down
+to `get/update/patch` only — the helper will still start.
+
+#### 3.1.4 Important caveats
+
+- **The Secret MUST contain both halves.** If only the public key
+  is present, the helper refuses to start ("refusing to operate")
+  and you must restore the private key or delete the Secret to
+  let the helper regenerate.
+- **All helper replicas must reference the same Secret.** With
+  `replicas: 1` this is automatic. If you scale up, do not let
+  each replica generate its own key — that would break in-flight
+  FRSes.
+- **Backing up the key is your responsibility** when you pre-
+  create it. The auto-generated path is also persisted in the
+  Secret, but the auto-generation gives you a one-time bootstrap
+  for free. A pre-created key needs the same backup treatment as
+  any other secret — see "Backing up / restoring the keypair"
+  above.
+
 ---
 
 ## 4. Required NetworkPolicy for FRS dial
@@ -406,10 +500,12 @@ Confirmation now uses an in-app dialog (no browser
 | ------- | ------------ | --- |
 | Helper pod `CrashLoopBackOff` with `secrets is forbidden: cannot create` | `resourceNames` was re-added to the Secret `create` grant | See RBAC note in §2. |
 | Helper pod `CrashLoopBackOff` with `secrets "kasten-frs-helper-private-key" has public key but no private key` | A previous operator put only the public key in the Secret | `oc -n kasten-io delete secret kasten-frs-helper-private-key` and let the helper re-generate. |
+| **Helper pod `CrashLoopBackOff` with `fatal: load/generate SSH key: get secret ...: dial tcp 172.30.0.1:443: i/o timeout`** | **The pod cannot reach the Kubernetes API server.** This is an **egress** problem (a `NetworkPolicy` blocking egress from the helper namespace, or the namespace is on an unreachable subnet, or the cluster has a private control plane that the namespace can't route to). The first `secrets.Get` call fails before `LoadOrGenerate` can decide to create. | **Fix the egress path first** — allow egress to the API server from the helper namespace (OCP installs this by default unless a NetworkPolicy overrides it). If fixing egress is not possible in your environment, see §3.1 "Optional: pre-create the keypair manually" — but note that pre-creating the Secret does **not** help with this specific error, because the helper's first action is the same `secrets.Get` call which will also time out. The real fix is the egress path; everything else is cosmetic. |
 | Browser hangs at `i/o timeout` after clicking Create FRS | §4 NetworkPolicy missing | `oc apply -k deploy/` (re-applies) or apply the YAML from §4 directly. |
 | Every wizard FRS lands in `Failed` immediately | §5.2 SCC not granted | Apply Option A or B from §5.2. |
 | `Wait longer` button not present | The preparing page renders before the timeout fires; this is normal | Wait for timeout, then the button appears. |
 | Login page footer shows `dev` | `VERSION` build-arg not propagated | Re-build the image with `--build-arg VERSION=vX.Y.Z`; see §10. |
+| Helper works once, but a brand-new FRSes fails auth | A pre-existing FRS still references the **old** SSH key (operator rotated the keypair, or auto-generation produced a new one because someone deleted the Secret) | Either restore the previous keypair in the Secret (back it up first — see §3), or delete the old FRSes and recreate via the wizard. |
 
 For anything else, see the design spec (`docs/superpowers/specs/`)
 and the implementation plan (`docs/implementation_plan.md`).

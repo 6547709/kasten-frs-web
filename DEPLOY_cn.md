@@ -212,6 +212,90 @@ oc -n kasten-io apply -f ssh-key.yaml
 跑的 FRS 会失去 SFTP 访问能力** — FRS CR 还在,但 helper 没法
 认证了。把残留 FRS 删掉,再用向导重建。
 
+### 3.1 可选:手工预创建密钥对
+
+🟢 **可选**。正常首次安装直接跳过这一节 — helper 首次启动会
+自己生成密钥对。只有下面任一情况才需要看:
+
+- helper 的 ServiceAccount **不允许 `create` Secret**(比如你
+  安装后加固了 RBAC)
+- **气隙 / 预烘焙**集群,helper pod 首次启动连不上 API server
+  (见 §9 故障排查表里 "helper 连不上 API server" 那一行)
+- 多副本 helper 想用**同一把共享密钥**(当前 Deployment 是
+  1 副本,所以基本用不到 — 扩到多副本时,所有副本必须用同一
+  把)
+- 想把**现成的密钥**灌进去(比如从你的密钥管理平台出来的)
+
+#### 3.1.1 生成密钥对
+
+在任意有 `ssh-keygen` 的机器上:
+
+```bash
+ssh-keygen -t ed25519 -N '' -f kasten-frs-helper -C kasten-frs-web-helper
+# kasten-frs-helper       <- 私钥
+# kasten-frs-helper.pub   <- 公钥
+```
+
+helper 接受任何 ed25519 / RSA 密钥 — 推荐 ed25519,更小。**不要
+设口令**(`-N ''`):helper 没法在无人值守时用有口令的密钥。
+
+#### 3.1.2 创建 Secret
+
+把两段都 base64 包一下,在 helper 命名空间里建一个
+`kubernetes.io/ssh-auth` Secret:
+
+```bash
+NS=kasten-io                                # helper 命名空间
+NAME=kasten-frs-helper-private-key          # Secret 名(默认)
+PRIV=$(base64 -w0 kasten-frs-helper)        # 私钥的 base64
+PUB=$(base64 -w0  kasten-frs-helper.pub)    # 公钥的 base64
+
+oc -n $NS create secret generic $NAME \
+  --type=kubernetes.io/ssh-auth \
+  --from-file=ssh-privatekey=kasten-frs-helper \
+  --from-file=ssh-publickey=kasten-frs-helper.pub
+```
+
+> `--type=kubernetes.io/ssh-auth` 对我们 helper 来说只是标注
+> 意图(我们直接读 data 字段),但留着能跟 helper 自己建的类型
+> 保持一致。
+
+验证两个字段都进去了:
+
+```bash
+oc -n $NS get secret $NAME -o jsonpath='{.data.ssh-privatekey}' | base64 -d
+# -----BEGIN OPENSSH PRIVATE KEY-----
+# ...
+oc -n $NS get secret $NAME -o jsonpath='{.data.ssh-publickey}'  | base64 -d
+# ssh-ed25519 AAAA… kasten-frs-web-helper
+```
+
+#### 3.1.3 预创建之后行为的变化
+
+helper 首次启动的 `LoadOrGenerate` 路径会变成:
+
+1. `secrets.Get` → 成功(Secret 已经在了)。
+2. `ssh-privatekey` 和 `ssh-publickey` 都在 → 走 `parseInto`,
+   **不会**再尝试 `create` Secret。
+3. helper 用你给的密钥启动。
+
+也就是说 helper 不再需要 Secret 的 `create` 权限。如果安全团队
+希望收紧到只 `get/update/patch`,**可以**把 `06-rbac.yaml` 里
+的 `create` 规则删掉,helper 照样能起来。
+
+#### 3.1.4 重要提醒
+
+- **Secret 里必须两段都在。** 只有公钥的话,helper **拒绝启动**
+  (报 "refusing to operate"),要么补回私钥,要么删掉 Secret
+  让 helper 自己重新生成。
+- **所有 helper 副本必须指向同一个 Secret。** `replicas: 1` 时
+  天然就这样。如果将来扩到多副本,千万不要让每个副本各自生成
+  自己的密钥 — 那会把正在跑的 FRS 全搞挂。
+- **预创建之后,密钥备份是你自己的责任。** 自动生成的路径也
+  是把密钥放在 Secret 里,但自动生成天然给了一次性引导。预创建
+  进来的密钥跟别的 Secret 一样需要备份 — 见上面的"备份 / 恢复
+  密钥对"。
+
 ---
 
 ## 4. 必须配置的 NetworkPolicy(用于拨 FRS)
@@ -385,10 +469,12 @@ RBAC。确认用的是应用内对话框(不再用浏览器的 `window.confirm`
 | ---- | -------- | ---- |
 | helper pod `CrashLoopBackOff` 报 `secrets is forbidden: cannot create` | 给 Secret `create` 授权又加回了 `resourceNames` | 看 §2 的 RBAC 注意。 |
 | helper pod `CrashLoopBackOff` 报 `secrets "kasten-frs-helper-private-key" has public key but no private key` | 之前的运维只把公钥放进了 Secret | `oc -n kasten-io delete secret kasten-frs-helper-private-key`,让 helper 重新生成。 |
+| **helper pod `CrashLoopBackOff` 报 `fatal: load/generate SSH key: get secret ...: dial tcp 172.30.0.1:443: i/o timeout`** | **pod 连不上 Kubernetes API server。** 这是 **egress** 问题(NetworkPolicy 拦了 helper 命名空间的出向、命名空间在不可路由的子网、或者集群的 private control plane 那个子网路由不到)。`LoadOrGenerate` 的第一步 `secrets.Get` 就超时了,根本走不到创建那一步。 | **先修 egress 路径** — 放行 helper 命名空间到 API server 的出向(OCP 默认就放开了,除非你额外加了 NetworkPolicy 拦掉)。如果环境上确实修不了 egress,看 §3.1 "可选:手工预创建密钥对" — 但**注意**,预创建 Secret 解决不了这个具体的报错,因为 helper 启动时第一次动作就是同一个 `secrets.Get`,照样会超时。**真正的修法是 egress**,其它都只是表面文章。 |
 | 点 Create FRS 之后浏览器卡在 `i/o timeout` | §4 NetworkPolicy 没生效 | 重新 `oc apply -k deploy/` 或直接应用 §4 的 YAML。 |
 | 每个向导 FRS 一上来就是 `Failed` | §5.2 SCC 没授 | 应用 §5.2 的方式 A 或 B。 |
 | 找不到 `Wait longer` 按钮 | 准备页面在超时前就渲染了,这是正常的 | 等到超时后,按钮就会出现。 |
 | 登录页 footer 显示 `dev` | `VERSION` build-arg 没传进去 | 重新构建镜像,加 `--build-arg VERSION=vX.Y.Z`;详见 §10。 |
+| helper 第一次用得好好的,突然新建的 FRS 鉴权失败 | 有老 FRS 还引用着**旧**的 SSH 密钥(运维轮换了密钥对,或者有人删了 Secret 让 helper 自动生成了新密钥) | 要么把旧密钥对写回 Secret(记得先备份 — 见 §3),要么把老 FRS 全删了再用向导重建。 |
 
 其他问题看设计 spec(`docs/superpowers/specs/`)和实施计划
 (`docs/implementation_plan.md`)。

@@ -44,7 +44,15 @@ func LoadOrGenerate(ctx context.Context, cli kubernetes.Interface, ns, name stri
 	case apierrors.IsNotFound(err):
 		return generateAndPersist(ctx, secrets, ns, name)
 	case err != nil:
-		return nil, fmt.Errorf("get secret %s/%s: %w", ns, name, err)
+		// Surface an actionable hint alongside the raw K8s client
+		// error. The most common "get secret" failures we see in
+		// the field are (a) an egress NetworkPolicy blocking the
+		// helper pod from reaching the API server ("dial tcp
+		// 172.30.0.1:443: i/o timeout") and (b) an RBAC denial
+		// ("secrets is forbidden"). The raw wrapped error already
+		// contains enough detail; the hint just points the operator
+		// at the two manual workaround sections in DEPLOY.md.
+		return nil, fmt.Errorf("get secret %s/%s: %w (hint: see DEPLOY.md §3.1 to pre-create the keypair manually, or §9 for the egress/RBAC error you are seeing)", ns, name, err)
 	}
 
 	priv := sec.Data[fieldPrivate]
