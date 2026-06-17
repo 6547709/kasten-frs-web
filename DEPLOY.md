@@ -64,11 +64,32 @@ service, this policy is missing — apply it and retry.
 
 ## OpenShift SecurityContextConstraints
 
+Two different pods are involved; only one needs privileged SCC.
+
+### Helper pod (no SCC needed)
+
+The `kasten-frs-web-helper` Deployment ships with the standard
+restricted-v2-friendly securityContext:
+
+- `runAsNonRoot: true`
+- `allowPrivilegeEscalation: false`
+- `capabilities.drop: [ALL]`
+- `readOnlyRootFilesystem: true`
+- no hostPath, no privileged container, no special volumes
+
+OCP's default restricted-v2 SCC accepts this verbatim. The helper
+SA `kasten-frs-web-helper` in the `kasten-io` namespace inherits
+that SCC automatically through the `system:authenticated` group,
+so **no extra SCC grant is needed for the helper**.
+
+### FRS mounter pod (K10 datamover — needs privileged)
+
 The K10 datamover mounts FRS data via a privileged container
-(securityContext.privileged=true + hostPath + capabilities.add
-SYS_ADMIN). OCP's restricted-v2 SCC rejects this by default. The
-helper bundle cannot grant SCCs itself, but you need to make
-sure the K10 controller can run its FRS mounter pod.
+(`securityContext.privileged=true` + hostPath +
+`capabilities.add: SYS_ADMIN`). OCP's restricted-v2 SCC rejects
+this by default. The helper bundle cannot grant SCCs itself,
+but you need to make sure the K10 controller can run its FRS
+mounter pod.
 
 Two options:
 
