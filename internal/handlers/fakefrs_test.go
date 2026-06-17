@@ -71,3 +71,4 @@ func (f *fakeFRS) DeleteFRS(_ context.Context, _, _ string) error { return nil }
 func (f *fakeFRS) WaitForReady(_ context.Context, ns, name string, _ time.Duration) (k8s.FRSView, error) {
 	return k8s.FRSView{Ref: k8s.FRSRef{Namespace: ns, Name: name}, State: "Ready"}, nil
 }
+func (f *fakeFRS) LookupFRSSource(_ context.Context, _ *k8s.FRSView) {}

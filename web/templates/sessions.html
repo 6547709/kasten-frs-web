@@ -2,8 +2,9 @@
   <thead>
     <tr>
       <th style="width:80px">State</th>
-      <th style="width:22%">FRS Name</th>
-      <th style="width:14%">Namespace</th>
+      <th style="width:18%">FRS Name</th>
+      <th>虚拟机 (Source App)</th>
+      <th style="width:18%">还原点时间</th>
       <th>剩余</th>
       <th style="width:18%; text-align:right; padding-right:18px">Action</th>
     </tr>
@@ -13,7 +14,21 @@
     <tr>
       <td><span class="badge {{.State | lower}}">{{.State}}</span></td>
       <td><strong>{{.Ref.Name}}</strong></td>
-      <td>{{.Ref.Namespace}}</td>
+      <td>
+        {{if .SourceApp}}
+          <strong>{{.SourceApp}}</strong>
+          {{if .SourceAppNS}}<span class="ns-tag">{{.SourceAppNS}}</span>{{end}}
+        {{else}}
+          <span class="muted">—</span>
+        {{end}}
+      </td>
+      <td>
+        {{if .RestorePointCreatedAt}}
+          {{.RestorePointCreatedAt.Format "2006-01-02 15:04"}}
+        {{else}}
+          <span class="muted">—</span>
+        {{end}}
+      </td>
       <td>
         <span class="badge" data-expiry="{{.ExpiryTime.Format "2006-01-02T15:04:05Z07:00"}}">
           <span class="exp-text">…</span>
@@ -30,7 +45,7 @@
       </td>
     </tr>
     {{else}}
-    <tr><td colspan="5" style="text-align:center; padding:30px; color:#6B7480; font-style:italic">暂无可用 FRS 会话</td></tr>
+    <tr><td colspan="6" style="text-align:center; padding:30px; color:#6B7480; font-style:italic">暂无可用 FRS 会话</td></tr>
     {{end}}
   </tbody>
 </table>

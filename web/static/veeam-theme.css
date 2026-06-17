@@ -319,6 +319,16 @@ a:hover { text-decoration: underline; }
 }
 .simple-table td:first-child { padding-left: 18px; }
 .simple-table tr:hover td { background: var(--k10-row-hover); }
+.simple-table td .ns-tag {
+  display: inline-block;
+  font-size: 10.5px;
+  color: #7B8794;
+  background: #F0F2F5;
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-left: 6px;
+}
+.simple-table td .muted { color: #9AA5B1; }
 .simple-table td .badge {
   display: inline-block;
   font-size: 11px;

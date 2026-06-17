@@ -111,6 +111,7 @@ type FRSProvider interface {
 	CreateFRS(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error)
 	DeleteFRS(ctx context.Context, ns, name string) error
 	WaitForReady(ctx context.Context, ns, name string, timeout time.Duration) (k8s.FRSView, error)
+	LookupFRSSource(ctx context.Context, v *k8s.FRSView)
 }
 
 // Server wires auth, SFTP pool, and FRS provider into a *http.ServeMux.
@@ -237,6 +238,11 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, http.StatusBadGateway, "FRS 列表拉取失败", err.Error())
 		return
 	}
+	// Decorate each FRS with its source app name + restore-point
+	// creation time so the sessions table can disambiguate FRSes
+	// that share a generated name prefix (e.g. multiple FRSes
+	// against the same VM show as frs-wizard-abcde / frs-wizard-fghij).
+	s.enrichFRSContext(r.Context(), frsList)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
 		"Title":        "活跃 FRS 会话",
@@ -713,6 +719,22 @@ func (s *Server) frsListVolumes(ctx context.Context, ns, name string) ([]k8s.Vol
 
 func (s *Server) frsGet(ctx context.Context, ref k8s.FRSRef) (k8s.FRSView, error) {
 	return s.frs.GetFRS(ctx, ref)
+}
+
+// enrichFRSContext decorates each FRSView in-place with the
+// source app name + restore-point creation time so the sessions
+// table can disambiguate FRSes that share a generated name
+// prefix (e.g. frs-wizard-abcde vs frs-wizard-fghij). Errors
+// are logged and ignored — the table still renders with empty
+// fields if K8s is unreachable.
+func (s *Server) enrichFRSContext(ctx context.Context, list []k8s.FRSView) {
+	if len(list) == 0 {
+		return
+	}
+	slog.Info("sessions.enrich.start", "count", len(list))
+	for i := range list {
+		s.frs.LookupFRSSource(ctx, &list[i])
+	}
 }
 
 func (s *Server) frsCreate(ctx context.Context, ns string, spec k8s.FRSpec) (*k8s.FRSView, error) {

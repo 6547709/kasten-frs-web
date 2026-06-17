@@ -29,6 +29,18 @@ type FRSView struct {
 	ExpiryTime  time.Time
 	State       string
 	CreatedAt   time.Time
+	// SourceApp is the VM/app name this FRS was created from
+	// (parsed from the FRS spec.volumes[].restorePointName →
+	// RestorePoint metadata.labels.k10.kasten.io/appName).
+	// Empty when the FRS was created out-of-band.
+	SourceApp string
+	// SourceAppNS is the namespace of that app.
+	SourceAppNS string
+	// RestorePointCreatedAt is the creation timestamp of the
+	// RestorePoint this FRS is bound to. Set alongside
+	// SourceApp so the table can show "VM @ time" instead of
+	// just "FRS name".
+	RestorePointCreatedAt time.Time
 }
 
 // FRSGroupVersionResource is the GVR for FileRecoverySession.
@@ -123,6 +135,57 @@ func (c *Client) GetFRS(ctx context.Context, ref FRSRef) (FRSView, error) {
 		return FRSView{}, fmt.Errorf("FRS %s/%s not in connectable state", ref.Namespace, ref.Name)
 	}
 	return v, nil
+}
+
+// LookupFRSSource fills in SourceApp / SourceAppNS /
+// RestorePointCreatedAt on the given FRSView by reading the FRS
+// spec.volumes[].restorePointName and pulling the matching
+// RestorePoint's labels + creation timestamp. Best-effort: any
+// error leaves the FRSView unchanged so the table can still
+// render the row.
+func (c *Client) LookupFRSSource(ctx context.Context, v *FRSView) {
+	if c.isFake {
+		return
+	}
+	// Locate the underlying FRS object so we can read
+	// spec.volumes[0].restorePointName. We re-list (cheap) rather
+	// than threading the raw object through ListActiveFRS, because
+	// the watch goroutine also calls this independently.
+	items, err := c.dyn.Resource(FRSGroupVersionResource).Namespace(v.Ref.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return
+	}
+	var item *unstructured.Unstructured
+	for i := range items.Items {
+		if items.Items[i].GetName() == v.Ref.Name {
+			item = &items.Items[i]
+			break
+		}
+	}
+	if item == nil {
+		return
+	}
+	volumes, _, _ := unstructured.NestedSlice(item.Object, "spec", "volumes")
+	for _, vol := range volumes {
+		m, ok := vol.(map[string]any)
+		if !ok {
+			continue
+		}
+		rpName, _, _ := unstructured.NestedString(m, "restorePointName")
+		if rpName == "" {
+			continue
+		}
+		// FRS spec.volumes is always against the same namespace
+		// as the FRS itself.
+		rp, err := c.dyn.Resource(RestorePointGVR).Namespace(v.Ref.Namespace).Get(ctx, rpName, metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+		v.SourceApp = rp.GetLabels()["k10.kasten.io/appName"]
+		v.SourceAppNS = rp.GetLabels()["k10.kasten.io/appNamespace"]
+		v.RestorePointCreatedAt = rp.GetCreationTimestamp().Time
+		return
+	}
 }
 
 // FRSpec is the spec for creating a FileRecoverySession.
