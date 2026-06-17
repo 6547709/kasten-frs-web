@@ -283,6 +283,16 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// partial=ready is the polling endpoint used by the "FRS 正在
+	// 准备" page. Resolve it BEFORE any other branch so renderPreparing
+	// / renderError can't accidentally return a full <html> document
+	// that htmx would then inject into the preparing wrapper and
+	// stack one full layout per poll (the "屏幕套屏幕" bug).
+	if r.URL.Query().Get("partial") == "ready" {
+		s.handlePartialReady(w, r, ref, path)
+		return
+	}
+
 	// Check watch map first for terminal states from wizard creation.
 	if ws, ok := s.watches.get(ref); ok && ws.Done {
 		if ws.State == "Ready" {
@@ -328,27 +338,6 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// partial=ready is the polling endpoint used by the "FRS 正在
-	// 准备" page. We must NOT return a full layout here — the polling
-	// div uses hx-swap="innerHTML" to drop the response into a
-	// sub-element, and a full <html> document would corrupt the DOM.
-	// Behaviour by FRS state:
-	//   Ready   -> 200 + browse_filelist_fragment + HX-Redirect
-	//              to /browse so the client does a full reload and
-	//              renders the proper page (browse_body, not the
-	//              preparing page)
-	//   !Ready  -> 204 No Content; client keeps polling
-	if r.URL.Query().Get("partial") == "ready" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("HX-Redirect", "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path="+url.QueryEscape(path))
-		if err := pageTemplates.ExecuteTemplate(w, "browse_filelist_fragment", map[string]any{
-			"FRS": ref, "Path": path, "Entries": entries, "User": s.auth.Username,
-		}); err != nil {
-			slog.Error("render browse fragment", "err", err)
-		}
-		return
-	}
-
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
 		"Title":        "浏览 " + ref.Namespace + "/" + ref.Name,
@@ -360,6 +349,54 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		"Version":      s.version,
 	}); err != nil {
 		slog.Error("render browse", "err", err)
+	}
+}
+
+// handlePartialReady serves the preparing page's polling endpoint.
+// Returns a fragment suitable for hx-swap="innerHTML" against the
+// preparing wrapper. Critical: NEVER return a full layout here,
+// otherwise htmx injects the whole <html> into the wrapper and
+// the next poll wraps it in another layer ("屏幕套屏幕").
+// Behaviour:
+//   Ready         -> 204 No Content + HX-Redirect. The browser
+//                     follows the redirect to /browse, which
+//                     renders the proper page from scratch.
+//   NotReady      -> 204 No Content (poll again in 2s).
+//   Failed/Timeout -> 200 + renderPreparing so the user sees
+//                     the terminal failure inline.
+func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref k8s.FRSRef, path string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if ws, ok := s.watches.get(ref); ok {
+		switch ws.State {
+		case "Ready":
+			slog.Info("frs.partial.ready", "frs", ref.Namespace+"/"+ref.Name)
+			w.Header().Set("HX-Redirect", "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path="+url.QueryEscape(path))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		case "Failed", "Timeout":
+			slog.Info("frs.partial.terminal", "frs", ref.Namespace+"/"+ref.Name, "state", ws.State)
+			s.renderPreparing(w, ref, ws)
+			return
+		}
+	}
+	// No watch entry (operator pre-created FRS) or still pending:
+	// query K8s, treat empty/Failed as terminal, anything else as
+	// keep-polling.
+	view, err := s.frsGet(r.Context(), ref)
+	if err != nil {
+		slog.Warn("frs.partial.query", "frs", ref.Namespace+"/"+ref.Name, "err", err)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	switch view.State {
+	case "Ready":
+		slog.Info("frs.partial.ready", "frs", ref.Namespace+"/"+ref.Name)
+		w.Header().Set("HX-Redirect", "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path="+url.QueryEscape(path))
+		w.WriteHeader(http.StatusNoContent)
+	case "Failed":
+		s.renderPreparing(w, ref, &watchState{State: "Failed", View: view, Done: true})
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

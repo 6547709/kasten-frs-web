@@ -1,0 +1,41 @@
+# K10's datamover controller creates a per-FRS NetworkPolicy whose
+# ingress source is restricted to a single namespace — by default
+# the namespace where the app lives (e.g. `default` for VM-backed
+# apps). Because the helper pod runs in `kasten-io`, those
+# policies block our SFTP dial and the browser hangs with an
+# `i/o timeout` on the FRS service ClusterIP:2222.
+#
+# This policy fixes that by widening the ingress on every K10
+# generation=1 FRS pod to also accept the helper pod. K10
+# controller-created policies still apply alongside this one
+# (whitelist is union), so the original default-ns source
+# restriction is preserved — this just adds the helper as an
+# additional allowed source.
+#
+# Apply once per cluster. No RBAC change needed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kasten-frs-web-helper-allow-all-frs
+  namespace: kasten-io
+spec:
+  # Match every FRS mounter pod. K10 labels every generation-1
+  # datamover pod with k10.kasten.io/frs-generation="1" so this
+  # selector picks up both k10tools-created and wizard-created
+  # FRSes. Future generations can be added or wildcarded here.
+  podSelector:
+    matchLabels:
+      k10.kasten.io/frs-generation: "1"
+  ingress:
+    # Source: only the helper pod. We keep the ingress narrow
+    # because 2222 is SFTP and we don't want any other tenant
+    # workload able to reach the FRS service via this path.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kasten-frs-web-helper
+      ports:
+        - port: 2222
+          protocol: TCP
+  policyTypes:
+    - Ingress

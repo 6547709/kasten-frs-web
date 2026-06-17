@@ -39,6 +39,11 @@ type RestorePoint struct {
 type VolumeArtifact struct {
 	PVCName string
 	Size    string
+	// IsClone is true for K10-managed DataVolume clones that
+	// appear alongside the source PVC in the artifact list. K10
+	// datamover accepts only the clone name as spec.volumes[].pvcName;
+	// the source PVC alone 502s with "snapshot not found".
+	IsClone bool
 }
 
 // ListVMs returns all VMs discovered via appType=virtualMachine RPs,

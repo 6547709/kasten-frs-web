@@ -11,4 +11,5 @@ resources:
 - 30-service.yaml
 - 40-route.yaml
 - 50-networkpolicy.yaml
+- 55-networkpolicy-helper-access-frs.yaml
 # 10-secret.example.yaml is not included; users create it manually.
