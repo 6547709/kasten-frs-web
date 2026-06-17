@@ -22,6 +22,46 @@ key never leaves the helper pod.
 oc apply -k deploy/
 ```
 
+## Required NetworkPolicy for FRS dial
+
+The K10 datamover controller creates a per-FRS `NetworkPolicy` whose
+ingress source is the namespace where the app lives (e.g. `default`).
+Because the helper pod runs in `kasten-io`, those policies block the
+SFTP dial to FRS port 2222 and the browser hangs with an
+`i/o timeout` after creating an FRS.
+
+The bundle ships `deploy/55-networkpolicy-helper-access-frs.yaml`
+which widens ingress on every K10 generation-1 FRS pod to also
+accept the helper pod. `oc apply -k deploy/` applies it. If you
+deploy without the kustomize bundle, copy the YAML and apply it
+explicitly:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kasten-frs-web-helper-allow-all-frs
+  namespace: kasten-io
+spec:
+  podSelector:
+    matchLabels:
+      k10.kasten.io/frs-generation: "1"
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: kasten-frs-web-helper
+    ports:
+    - port: 2222
+      protocol: TCP
+  policyTypes:
+  - Ingress
+```
+
+Verification: after creating a wizard FRS, click through to the
+directory tree. If the dial hangs with `i/o timeout` on the FRS
+service, this policy is missing — apply it and retry.
+
 ## Post-flight verification
 
 ```bash

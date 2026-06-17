@@ -10,7 +10,12 @@ data over HTTPS, in environments where OpenShift Router cannot expose raw SFTP.
 - Cluster-wide FRS listing, namespace-scoped Secret read (least-privilege)
 - Veeam-style UI (Chinese localization)
 - Prometheus metrics, structured logging
-- NetworkPolicy-aware: explicit egress allowlist for DNS, K8s API, FRS :2222
+- NetworkPolicy-aware: explicit egress allowlist for DNS, K8s API, FRS :2222;
+  ships a `NetworkPolicy` in `kasten-io` that lets the helper pod
+  dial the per-FRS datamover Service (required because K10's
+  controller-restricted ingress would otherwise block SFTP).
+  See [DEPLOY.md](DEPLOY.md#required-networkpolicy-for-frs-dial) for
+  details.
 
 ## Wizard (v0.3.0+)
 
