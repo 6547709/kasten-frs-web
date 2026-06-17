@@ -581,6 +581,11 @@ button.danger:hover { background: #D03030; }
   border-top: 1px solid #D5DBE0;
   border-radius: 4px;
   margin-top: 12px;
+  /* Right-align the final "Create FRS" action button so it reads as
+     the terminal step of the left-to-right wizard flow
+     (Step 0 → Step 1 → Step 2 → Step 3 → Create). The hidden inputs
+     above it are unaffected (block elements ignore text-align). */
+  text-align: right;
 }
 .wizard-create button[disabled] { opacity: 0.5; cursor: not-allowed; }
 .vol-item { display: block; padding: 4px 0; }
