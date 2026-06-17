@@ -62,6 +62,45 @@ Verification: after creating a wizard FRS, click through to the
 directory tree. If the dial hangs with `i/o timeout` on the FRS
 service, this policy is missing — apply it and retry.
 
+## OpenShift SecurityContextConstraints
+
+The K10 datamover mounts FRS data via a privileged container
+(securityContext.privileged=true + hostPath + capabilities.add
+SYS_ADMIN). OCP's restricted-v2 SCC rejects this by default. The
+helper bundle cannot grant SCCs itself, but you need to make
+sure the K10 controller can run its FRS mounter pod.
+
+Two options:
+
+1. **Label the kasten-io namespace privileged** (simplest; matches
+   the upstream K10 docs recommendation):
+
+   ```bash
+   oc label namespace kasten-io \
+       pod-security.kubernetes.io/enforce=privileged \
+       pod-security.kubernetes.io/audit=privileged \
+       pod-security.kubernetes.io/warn=privileged \
+       --overwrite
+   ```
+
+   Without this, every wizard / k10tools-created FRS will end up
+   in `state=Failed` with `CreatedPod: violates PodSecurity
+   "restricted:latest"` and no SFTP dial will succeed.
+
+2. **Or grant the privileged SCC to the K10 datamover SA** in the
+   namespaces where FRSes are created (typically `default`):
+
+   ```bash
+   oc adm policy add-scc-to-user privileged -n default -z default
+   ```
+
+   Choose option 1 unless your security team requires the more
+   granular option 2.
+
+The `scripts/deploy-test.sh` step5_netpol already verifies
+NetworkPolicy connectivity; the SCC check above is documented
+here only — apply it during pre-flight.
+
 ## Post-flight verification
 
 ```bash

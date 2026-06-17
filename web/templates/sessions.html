@@ -36,16 +36,16 @@
       </td>
       <td class="action" style="text-align:right">
         <form method="post" action="/sessions/{{.Ref.Namespace}}/{{.Ref.Name}}/connect" style="display:inline">
-          <button type="submit">浏览 ›</button>
+          <button type="submit">Browse ›</button>
         </form>
         <form method="post" action="/sessions/{{.Ref.Namespace}}/{{.Ref.Name}}/delete" style="display:inline"
-              class="confirm-delete" data-confirm="结束并删除 FRS {{.Ref.Namespace}}/{{.Ref.Name}}?">
-          <button type="submit" class="danger">结束</button>
+              class="confirm-delete" data-confirm="End and delete FRS {{.Ref.Namespace}}/{{.Ref.Name}}?">
+          <button type="submit" class="danger">End</button>
         </form>
       </td>
     </tr>
     {{else}}
-    <tr><td colspan="6" style="text-align:center; padding:30px; color:#6B7480; font-style:italic">暂无可用 FRS 会话</td></tr>
+    <tr><td colspan="6" style="text-align:center; padding:30px; color:#6B7480; font-style:italic">No active FRS sessions.</td></tr>
     {{end}}
   </tbody>
 </table>

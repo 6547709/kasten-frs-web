@@ -4,7 +4,6 @@ namespace: kasten-io
 commonLabels:
   app: kasten-frs-web-helper
 resources:
-- 00-namespace.yaml
 - 05-serviceaccount.yaml
 - 06-rbac.yaml
 - 20-deployment.yaml
@@ -13,3 +12,13 @@ resources:
 - 50-networkpolicy.yaml
 - 55-networkpolicy-helper-access-frs.yaml
 # 10-secret.example.yaml is not included; users create it manually.
+#
+# The kasten-io Namespace is intentionally NOT created here. K10's
+# helm chart owns it; if you apply this bundle on a fresh cluster
+# without K10 installed, create the namespace manually with:
+#   oc create namespace kasten-io
+# Also note: do NOT set pod-security.kubernetes.io/enforce on the
+# kasten-io namespace to anything stricter than 'privileged' if
+# K10's FRS mounter pod will run there — the pod needs
+# securityContext.privileged=true to mount FRS volumes on
+# OCP. See DEPLOY.md#openshift-securitycontextconstraints.

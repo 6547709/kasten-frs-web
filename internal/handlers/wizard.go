@@ -57,12 +57,12 @@ func (wm *watchMap) del(ref k8s.FRSRef) {
 func (s *Server) handleWizardPage(w http.ResponseWriter, r *http.Request) {
 	nsList, err := s.frsListVMNamespaces(r.Context())
 	if err != nil {
-		s.renderError(w, http.StatusBadGateway, "Namespace 列表拉取失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to list namespaces", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
-		"Title":        "恢复向导",
+		"Title":        "Recovery Wizard",
 		"BodyTemplate": "wizard_body",
 		"NSList":       nsList,
 		"User":         s.auth.Username,
@@ -77,7 +77,7 @@ func (s *Server) handleWizardNamespaces(w http.ResponseWriter, r *http.Request) 
 	nsList, err := s.frsListVMNamespaces(r.Context())
 	if err != nil {
 		slog.Warn("wizard.nslist.failed", "user", s.auth.Username, "err", err)
-		s.renderError(w, http.StatusBadGateway, "Namespace 列表拉取失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to list namespaces", err.Error())
 		return
 	}
 	slog.Info("wizard.nslist", "user", s.auth.Username, "count", len(nsList))
@@ -103,7 +103,7 @@ func (s *Server) handleWizardVMs(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		slog.Warn("wizard.vmlist.failed", "user", s.auth.Username, "ns", ns, "err", err)
-		s.renderError(w, http.StatusBadGateway, "VM 列表拉取失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to list VMs", err.Error())
 		return
 	}
 	slog.Info("wizard.vmlist", "user", s.auth.Username, "ns", ns, "count", len(vms))
@@ -122,7 +122,7 @@ func (s *Server) handleWizardRPs(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	rps, err := s.frsListRPs(r.Context(), ns, name)
 	if err != nil {
-		s.renderError(w, http.StatusBadGateway, "RP 列表拉取失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to list RestorePoints", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -141,7 +141,7 @@ func (s *Server) handleWizardVolumes(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	arts, err := s.frsListVolumes(r.Context(), ns, name)
 	if err != nil {
-		s.renderError(w, http.StatusBadGateway, "Volume 列表拉取失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to list volumes", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -163,7 +163,7 @@ func (s *Server) handleWizardVolumes(w http.ResponseWriter, r *http.Request) {
 // uses the name in the returned FRSView.
 func (s *Server) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		s.renderError(w, http.StatusBadRequest, "表单错误", err.Error())
+		s.renderError(w, http.StatusBadRequest, "Bad form data", err.Error())
 		return
 	}
 	vmNs := r.FormValue("vmNs")
@@ -171,11 +171,11 @@ func (s *Server) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
 	rpName := r.FormValue("rpName")
 	pvcNames := r.Form["pvcNames"]
 	if vmNs == "" || vmName == "" || rpName == "" || len(pvcNames) == 0 {
-		s.renderError(w, http.StatusBadRequest, "参数不完整", "vmNs, vmName, rpName, pvcNames 必填")
+		s.renderError(w, http.StatusBadRequest, "Missing parameters", "vmNs, vmName, rpName, pvcNames are required")
 		return
 	}
 	if s.pubKeyPEM == "" {
-		s.renderError(w, http.StatusInternalServerError, "无 SSH 公钥", "helper 启动时未加载 SSH 公钥")
+		s.renderError(w, http.StatusInternalServerError, "No SSH public key", "helper did not load an SSH public key at startup")
 		return
 	}
 	slog.Info("wizard.create",
@@ -190,7 +190,7 @@ func (s *Server) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Error("wizard.create.failed", "user", s.auth.Username, "vm_ns", vmNs, "vm_name", vmName, "err", err)
-		s.renderError(w, http.StatusBadGateway, "创建 FRS 失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to create FRS", err.Error())
 		return
 	}
 	ref := view.Ref
@@ -241,17 +241,17 @@ func (s *Server) watchFRSCreated(ref k8s.FRSRef, initial k8s.FRSView) {
 // pick a different RP/VM.
 func (s *Server) handleWizardCancel(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		s.renderError(w, http.StatusBadRequest, "表单错误", err.Error())
+		s.renderError(w, http.StatusBadRequest, "Bad form data", err.Error())
 		return
 	}
 	frs := r.FormValue("frs")
 	parts := strings.SplitN(frs, "/", 2)
 	if len(parts) != 2 {
-		s.renderError(w, http.StatusBadRequest, "frs 参数错误", frs)
+		s.renderError(w, http.StatusBadRequest, "Bad frs parameter", frs)
 		return
 	}
 	if err := s.frsDelete(r.Context(), parts[0], parts[1]); err != nil {
-		s.renderError(w, http.StatusBadGateway, "取消失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to cancel", err.Error())
 		return
 	}
 	s.watches.del(k8s.FRSRef{Namespace: parts[0], Name: parts[1]})

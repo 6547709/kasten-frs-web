@@ -79,7 +79,7 @@ func TestHandleWizardPage_Renders(t *testing.T) {
 	if !strings.Contains(body, `value="default"`) {
 		t.Errorf("namespace option missing in body: %s", body)
 	}
-	if !strings.Contains(body, "-- 全部 namespace --") {
+	if !strings.Contains(body, "-- All namespaces --") {
 		t.Errorf("all-namespace sentinel missing in body: %s", body)
 	}
 	// Version should be wired through to the footer.

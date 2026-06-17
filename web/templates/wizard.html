@@ -1,34 +1,34 @@
 {{define "wizard_body"}}<div class="wizard-stage">
   <section class="wizard-panel wizard-panel-ns" id="panel-ns">
-    <div class="panel-title">第 0 步：选 namespace（区分同名 VM）</div>
+    <div class="panel-title">Step 0 — Namespace (disambiguates same-named VMs)</div>
     <select id="ns-select" name="ns">
-      <option value="">-- 全部 namespace --</option>
+      <option value="">-- All namespaces --</option>
       {{template "wizard_namespaces_fragment" .}}
     </select>
   </section>
 
   <div class="wizard-grid">
     <section class="wizard-panel" id="panel-vms">
-      <div class="panel-title">第 1 步：选虚拟机</div>
-      <input type="search" id="vm-filter" placeholder="搜索 VM 名（可滚动列表）…" autocomplete="off">
+      <div class="panel-title">Step 1 — Virtual Machine</div>
+      <input type="search" id="vm-filter" placeholder="Filter VMs (scrollable list)…" autocomplete="off">
       <ul class="vm-list" id="vm-list"
           hx-get="/wizard/vms" hx-trigger="load" hx-swap="innerHTML">
-        <li class="empty">载入中…</li>
+        <li class="empty">Loading…</li>
       </ul>
       <div class="vm-count" id="vm-count"></div>
     </section>
 
     <section class="wizard-panel" id="panel-rps">
-      <div class="panel-title">第 2 步：选还原点</div>
+      <div class="panel-title">Step 2 — RestorePoint</div>
       <div id="rp-list">
-        <p class="empty">从左侧选一个 VM</p>
+        <p class="empty">Select a VM on the left.</p>
       </div>
     </section>
 
     <section class="wizard-panel" id="panel-vols">
-      <div class="panel-title">第 3 步：选 volume</div>
+      <div class="panel-title">Step 3 — Volume</div>
       <div id="vol-list">
-        <p class="empty">从中间选一个还原点</p>
+        <p class="empty">Select a RestorePoint in the middle column.</p>
       </div>
     </section>
   </div>
@@ -38,7 +38,7 @@
     <input type="hidden" name="vmName" id="vm-name">
     <input type="hidden" name="rpName" id="rp-name">
     <div id="pvc-fields"></div>
-    <button type="submit" id="wizard-submit" disabled>创建 FRS</button>
+    <button type="submit" id="wizard-submit" disabled>Create FRS</button>
   </form>
 </div>
 {{end}}
@@ -54,12 +54,12 @@
   <div class="vm-name"><strong>{{.AppName}}</strong></div>
   <div class="vm-meta">
     <span class="ns">{{.AppNamespace}}</span>
-    <span class="rp-count">{{.RPCount}} 个 RP</span>
-    {{if not .LastRPTime.IsZero}}<span class="last">最近 {{.LastRPTime.Format "2006-01-02 15:04"}}</span>{{end}}
+    <span class="rp-count">{{.RPCount}} RP</span>
+    {{if not .LastRPTime.IsZero}}<span class="last">latest {{.LastRPTime.Format "2006-01-02 15:04"}}</span>{{end}}
   </div>
 </li>
 {{else}}
-<li class="empty">暂无可恢复的 VM。确认 K10 有 <code>appType=virtualMachine</code> 的 RestorePoint。</li>
+<li class="empty">No recoverable VM found. Make sure K10 has at least one RestorePoint with label <code>appType=virtualMachine</code>.</li>
 {{end}}{{end}}
 
 {{define "wizard_rps_fragment"}}
@@ -73,7 +73,7 @@
   </div>
 </li>
 {{else}}
-<li class="empty">这个 VM 没有可用的还原点。</li>
+<li class="empty">No RestorePoints available for this VM.</li>
 {{end}}{{end}}
 
 {{define "wizard_vols_fragment"}}
@@ -86,6 +86,6 @@
   {{if .Size}}<span class="size">{{.Size}}</span>{{end}}
 </label>
 {{else}}
-<p class="empty">这个还原点没有 PVC artifacts。</p>
+<p class="empty">No PVC artifacts in this RestorePoint.</p>
 {{end}}
 </div>{{end}}

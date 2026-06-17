@@ -29,13 +29,13 @@
   <main class="workarea">
     {{if eq .BodyTemplate "sessions_body"}}
       <div class="workarea-title">FRS Sessions</div>
-      <div class="workarea-subtitle">活跃的文件恢复会话 — 点击 进入 浏览目录树</div>
+      <div class="workarea-subtitle">Active File Recovery Sessions — click Browse to inspect the directory tree</div>
     {{else if eq .BodyTemplate "browse_body"}}
       <div class="workarea-title">{{.FRS.Namespace}} / {{.FRS.Name}}</div>
-      <div class="workarea-subtitle">FRS 路径 &nbsp;›&nbsp; {{.Path}}</div>
+      <div class="workarea-subtitle">FRS path &nbsp;›&nbsp; {{.Path}}</div>
     {{else if eq .BodyTemplate "wizard_body"}}
-      <div class="workarea-title">恢复向导</div>
-      <div class="workarea-subtitle">选 VM → 选还原点 → 选 volume → 创建 FRS</div>
+      <div class="workarea-title">Recovery Wizard</div>
+      <div class="workarea-subtitle">Select namespace → VM → RestorePoint → volume → Create FRS</div>
     {{end}}
 
     {{if eq .BodyTemplate "browse_body"}}

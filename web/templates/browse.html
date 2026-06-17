@@ -1,8 +1,8 @@
 {{define "browse_body"}}<div>
   <div class="browse-actions">
     <form method="post" action="/sessions/{{.FRS.Namespace}}/{{.FRS.Name}}/delete"
-          class="confirm-delete" data-confirm="结束并删除 FRS {{.FRS.Namespace}}/{{.FRS.Name}}?">
-      <button type="submit" class="danger">结束并删除 FRS</button>
+          class="confirm-delete" data-confirm="End and delete FRS {{.FRS.Namespace}}/{{.FRS.Name}}?">
+      <button type="submit" class="danger">End and delete FRS</button>
     </form>
   </div>
   {{template "browse_filelist_fragment" .}}
@@ -19,7 +19,7 @@
   </thead>
   <tbody>
     {{if eq (len .Entries) 0}}
-    <tr><td colspan="4" class="empty">这个目录为空</td></tr>
+    <tr><td colspan="4" class="empty">This directory is empty.</td></tr>
     {{end}}
     {{if ne .Path "/"}}
     <tr>
@@ -30,7 +30,7 @@
       </td>
       <td class="size">—</td>
       <td class="modtime">—</td>
-      <td class="actions"><span style="color:#8A95A2">返回上级</span></td>
+      <td class="actions"><span class="muted">parent directory</span></td>
     </tr>
     {{end}}
     {{range .Entries}}
@@ -62,22 +62,21 @@
 </table>{{end}}
 
 {{define "browse_preparing_body"}}<div class="browse-preparing">
-  <h1>⏳ FRS 正在准备</h1>
-  <p>{{.FRS.Namespace}}/{{.FRS.Name}} 状态：<span class="badge {{.State | lower}}">{{.State}}</span></p>
-  <p>等待时间：<span id="elapsed">0</span> 秒</p>
+  <h1>⏳ FRS Preparing</h1>
+  <p>{{.FRS.Namespace}}/{{.FRS.Name}} state: <span class="badge {{.State | lower}}">{{.State}}</span></p>
+  <p>Waiting for <span id="elapsed">0</span> s</p>
   {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
   <form method="post" action="/wizard/cancel">
     <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
-    <button type="submit" class="danger">取消并删除 FRS</button>
+    <button type="submit" class="danger">Cancel and delete FRS</button>
   </form>
   <form method="post" action="/browse/extend" style="display:inline">
     <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
-    <button type="submit">再等 30 秒</button>
+    <button type="submit">Wait 30s more</button>
   </form>
   <!-- Polls /browse?partial=ready every 2s. While the FRS isn't Ready
-       yet, the handler renders this same preparing page; htmx swaps
-       innerHTML on this wrapper, so a Ready response replaces the
-       whole .browse-preparing block with the file-list + layout. -->
+       yet, the handler returns 204 No Content + HX-Redirect on Ready
+       (full reload) or the preparing block on terminal state. -->
   <div hx-get="/browse?frs={{.FRS.Namespace}}/{{.FRS.Name}}&path=/&partial=ready"
        hx-trigger="every 2s" hx-swap="innerHTML" hx-target="closest .browse-preparing"></div>
 </div>

@@ -216,7 +216,7 @@ func (s *Server) routes() {
 func (s *Server) handleLoginPage(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
-		"Title":        "登录",
+		"Title":        "Login",
 		"BodyTemplate": "login_body",
 		"Version":      s.version,
 	}); err != nil {
@@ -235,7 +235,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	frsList, err := s.frs.ListActiveFRS(r.Context(), s.nsWhitelist)
 	if err != nil {
-		s.renderError(w, http.StatusBadGateway, "FRS 列表拉取失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to list FRSes", err.Error())
 		return
 	}
 	// Decorate each FRS with its source app name + restore-point
@@ -245,7 +245,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	s.enrichFRSContext(r.Context(), frsList)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
-		"Title":        "活跃 FRS 会话",
+		"Title":        "Active FRS Sessions",
 		"BodyTemplate": "sessions_body",
 		"FRS":          frsList,
 		"User":         s.auth.Username,
@@ -261,12 +261,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	ref := k8s.FRSRef{Namespace: ns, Name: name}
 	view, err := s.frs.GetFRS(r.Context(), ref)
 	if err != nil {
-		s.renderError(w, http.StatusBadGateway, "FRS 查询失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to query FRS", err.Error())
 		return
 	}
 	if view.Port != int64(s.frsPort) {
-		s.renderError(w, http.StatusBadRequest, "FRS 端口不被允许",
-			fmt.Sprintf("FRS 报告端口 %d，但我们只允许 %d", view.Port, s.frsPort))
+		s.renderError(w, http.StatusBadRequest, "FRS port not permitted",
+			fmt.Sprintf("FRS reports port %d but only %d is allowed", view.Port, s.frsPort))
 		return
 	}
 
@@ -285,7 +285,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			"addr", addr,
 			"err", err,
 		)
-		s.renderError(w, http.StatusBadGateway, "SFTP 连接失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "SFTP connection failed", err.Error())
 		return
 	}
 	uid := userIDFromCookie(r, s.auth.CookieName)
@@ -302,7 +302,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	ref, path, err := parseFRSQuery(r)
 	if err != nil {
-		s.renderError(w, http.StatusBadRequest, "无效的 frs 查询", err.Error())
+		s.renderError(w, http.StatusBadRequest, "Invalid frs query", err.Error())
 		return
 	}
 
@@ -339,7 +339,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 				s.renderPreparing(w, ref, ws)
 				return
 			}
-			s.renderError(w, http.StatusBadGateway, "FRS 查询失败", err.Error())
+			s.renderError(w, http.StatusBadGateway, "Failed to query FRS", err.Error())
 			return
 		}
 		if view.State != "Ready" {
@@ -357,13 +357,13 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := sess.ListDir(path)
 	if err != nil {
-		s.renderError(w, http.StatusNotFound, "目录列表失败", err.Error())
+		s.renderError(w, http.StatusNotFound, "Failed to list directory", err.Error())
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
-		"Title":        "浏览 " + ref.Namespace + "/" + ref.Name,
+		"Title":        "Browse " + ref.Namespace + "/" + ref.Name,
 		"BodyTemplate": "browse_body",
 		"FRS":          ref,
 		"Path":         path,
@@ -426,7 +426,7 @@ func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref 
 func (s *Server) renderPreparing(w http.ResponseWriter, ref k8s.FRSRef, ws *watchState) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
-		"Title":        "FRS 准备中",
+		"Title":        "FRS preparing",
 		"BodyTemplate": "browse_preparing_body",
 		"FRS":          ref,
 		"State":        ws.State,
@@ -455,20 +455,20 @@ func errString(e error) string {
 // the new Pending state.
 func (s *Server) handleBrowseExtend(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		s.renderError(w, http.StatusBadRequest, "表单错误", err.Error())
+		s.renderError(w, http.StatusBadRequest, "Bad form data", err.Error())
 		return
 	}
 	frs := r.FormValue("frs")
 	parts := strings.SplitN(frs, "/", 2)
 	if len(parts) != 2 {
-		s.renderError(w, http.StatusBadRequest, "frs 参数错误", frs)
+		s.renderError(w, http.StatusBadRequest, "Bad frs parameter", frs)
 		return
 	}
 	ref := k8s.FRSRef{Namespace: parts[0], Name: parts[1]}
 	// Fetch the current FRS view to seed the watch map with a sensible initial.
 	v, err := s.frsGet(r.Context(), ref)
 	if err != nil {
-		s.renderError(w, http.StatusBadGateway, "FRS 查询失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to query FRS", err.Error())
 		return
 	}
 	s.watches.set(ref, &watchState{State: "Pending", View: v})
@@ -479,20 +479,20 @@ func (s *Server) handleBrowseExtend(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	ref, path, err := parseFRSQuery(r)
 	if err != nil {
-		s.renderError(w, http.StatusBadRequest, "无效的 frs 查询", err.Error())
+		s.renderError(w, http.StatusBadRequest, "Invalid frs query", err.Error())
 		return
 	}
 	key := sftpclient.SessionKey{UserSessionID: userIDFromCookie(r, s.auth.CookieName),
 		FRS: types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}}
 	sess, ok := s.pool.Get(key)
 	if !ok {
-		s.renderError(w, http.StatusUnauthorized, "SFTP 会话已过期",
-			"请返回 FRS Sessions 重新点击 进入")
+		s.renderError(w, http.StatusUnauthorized, "SFTP session expired",
+			"Please return to FRS Sessions and re-click Browse")
 		return
 	}
 	rc, err := sess.Open(path)
 	if err != nil {
-		s.renderError(w, http.StatusNotFound, "文件无法打开", err.Error())
+		s.renderError(w, http.StatusNotFound, "Failed to open file", err.Error())
 		return
 	}
 	defer rc.Close()
@@ -518,7 +518,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDownloadZip(w http.ResponseWriter, r *http.Request) {
 	ref, root, err := parseFRSQuery(r)
 	if err != nil {
-		s.renderError(w, http.StatusBadRequest, "无效的 frs 查询", err.Error())
+		s.renderError(w, http.StatusBadRequest, "Invalid frs query", err.Error())
 		return
 	}
 	if root == "" {
@@ -528,13 +528,13 @@ func (s *Server) handleDownloadZip(w http.ResponseWriter, r *http.Request) {
 		FRS: types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}}
 	sess, ok := s.pool.Get(key)
 	if !ok {
-		s.renderError(w, http.StatusUnauthorized, "SFTP 会话已过期",
-			"请返回 FRS Sessions 重新点击 进入")
+		s.renderError(w, http.StatusUnauthorized, "SFTP session expired",
+			"Please return to FRS Sessions and re-click Browse")
 		return
 	}
 	stat, err := sess.Stat(root)
 	if err != nil {
-		s.renderError(w, http.StatusNotFound, "FRS 路径不存在", err.Error())
+		s.renderError(w, http.StatusNotFound, "FRS path does not exist", err.Error())
 		return
 	}
 

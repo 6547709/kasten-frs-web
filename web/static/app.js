@@ -15,7 +15,7 @@
   document.addEventListener('submit', function (e) {
     const form = e.target;
     if (form && form.classList && form.classList.contains('confirm-delete')) {
-      const msg = form.getAttribute('data-confirm') || '确认执行此操作？';
+      const msg = form.getAttribute('data-confirm') || 'Confirm this action?';
       if (!window.confirm(msg)) {
         e.preventDefault();
       }

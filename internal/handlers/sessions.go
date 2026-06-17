@@ -14,7 +14,7 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := s.frsDelete(r.Context(), ns, name); err != nil {
 		slog.Error("frs.delete.failed", "user", s.auth.Username, "frs", ns+"/"+name, "err", err)
-		s.renderError(w, http.StatusBadGateway, "删除 FRS 失败", err.Error())
+		s.renderError(w, http.StatusBadGateway, "Failed to delete FRS", err.Error())
 		return
 	}
 	s.pool.CloseAllForFRS(ns, name)
