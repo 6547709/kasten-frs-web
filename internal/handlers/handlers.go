@@ -18,6 +18,8 @@ import (
 
 	"github.com/liguoqiang/kasten-frs-web/internal/auth"
 	"github.com/liguoqiang/kasten-frs-web/internal/k8s"
+	"github.com/liguoqiang/kasten-frs-web/internal/logging"
+	"github.com/liguoqiang/kasten-frs-web/internal/metrics"
 	"github.com/liguoqiang/kasten-frs-web/internal/sftpclient"
 	"github.com/liguoqiang/kasten-frs-web/web"
 	"k8s.io/apimachinery/pkg/types"
@@ -39,7 +41,29 @@ var pageTemplates = template.Must(
 		"parentPath":    parentPath,
 		"joinPath":      joinPath,
 		"lower":         strings.ToLower,
+		"humanSize":     humanSize,
 	}).ParseFS(web.Templates(), "templates/*.html"))
+
+// humanSize formats a byte count as a human-friendly string using
+// binary (1024-based) units, matching the convention most file
+// browsers use (e.g. 1536 → "1.5 KiB", 0 → "0 B"). Negative inputs
+// (shouldn't happen for file sizes) are clamped to 0.
+func humanSize(n int64) string {
+	if n < 0 {
+		n = 0
+	}
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for n/div >= unit && exp < 5 {
+		div *= unit
+		exp++
+	}
+	units := []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	return fmt.Sprintf("%.1f %s", float64(n)/float64(div), units[exp])
+}
 
 // splitPath turns an absolute path "/a/b/c" into a slice of
 // path-segments, ["a", "b", "c"]. An empty path or "/" yields nil.
@@ -165,6 +189,23 @@ func New(a *auth.Authenticator, pool *sftpclient.Pool, frs FRSProvider,
 // Router returns the underlying mux.
 func (s *Server) Router() *http.ServeMux { return s.mux }
 
+// StartBackground launches the server's background maintenance
+// goroutines (currently: the watch-map sweeper that evicts stale
+// wizard-created FRS watch entries). It returns immediately; the
+// goroutines exit when ctx is cancelled. Safe to call once at
+// startup. Entries are evicted ~1h after creation, swept every 10m.
+func (s *Server) StartBackground(ctx context.Context) {
+	s.watches.startSweeper(ctx, 10*time.Minute, time.Hour, s.logger)
+}
+
+// log returns a request-scoped logger carrying the request_id that
+// AccessLog stitched into ctx, so every line emitted while handling
+// one request can be correlated. Falls back to the server's base
+// logger when no request_id is present.
+func (s *Server) log(ctx context.Context) *slog.Logger {
+	return logging.FromContext(ctx, s.logger)
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -235,9 +276,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	frsList, err := s.frs.ListActiveFRS(r.Context(), s.nsWhitelist)
 	if err != nil {
+		metrics.FRSListTotal.WithLabelValues("error").Inc()
 		s.renderError(w, http.StatusBadGateway, "Failed to list FRSes", err.Error())
 		return
 	}
+	metrics.FRSListTotal.WithLabelValues("ok").Inc()
+	metrics.FRSListSize.Set(float64(len(frsList)))
 	// Decorate each FRS with its source app name + restore-point
 	// creation time so the sessions table can disambiguate FRSes
 	// that share a generated name prefix (e.g. multiple FRSes
@@ -250,8 +294,9 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		"FRS":          frsList,
 		"User":         s.auth.Username,
 		"Version":      s.version,
+		"CSRF":         s.auth.CSRFToken(r),
 	}); err != nil {
-		slog.Error("render sessions", "err", err)
+		s.log(r.Context()).Error("render sessions", "err", err)
 	}
 }
 
@@ -271,7 +316,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	addr := fmt.Sprintf("%s.%s.svc.cluster.local:%d", view.ServiceName, view.ServiceNS, view.Port)
-	slog.Info("sftp.connect.start",
+	log := s.log(r.Context())
+	log.Info("sftp.connect.start",
 		"user", s.auth.Username,
 		"frs", ns+"/"+name,
 		"service", view.ServiceName+"."+view.ServiceNS,
@@ -279,7 +325,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	)
 	sess, err := s.pool.Client().Dial(r.Context(), addr, view.HostKeySig)
 	if err != nil {
-		slog.Error("sftp.connect.failed",
+		metrics.SFTPConnectTotal.WithLabelValues("failure").Inc()
+		log.Error("sftp.connect.failed",
 			"user", s.auth.Username,
 			"frs", ns+"/"+name,
 			"addr", addr,
@@ -288,10 +335,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, http.StatusBadGateway, "SFTP connection failed", err.Error())
 		return
 	}
+	metrics.SFTPConnectTotal.WithLabelValues("success").Inc()
 	uid := userIDFromCookie(r, s.auth.CookieName)
 	key := sftpclient.SessionKey{UserSessionID: uid, FRS: types.NamespacedName{Namespace: ns, Name: name}}
 	s.pool.Store(key, sess)
-	slog.Info("sftp.connect.ready",
+	metrics.SFTPConnectionsActive.Set(float64(s.pool.Len()))
+	log.Info("sftp.connect.ready",
 		"user", s.auth.Username,
 		"frs", ns+"/"+name,
 		"addr", addr,
@@ -321,7 +370,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		if ws.State == "Ready" {
 			// fall through to normal browse
 		} else {
-			s.renderPreparing(w, ref, ws)
+			s.renderPreparing(w, r, ref, ws)
 			return
 		}
 	}
@@ -336,7 +385,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		view, err := s.frsGet(r.Context(), ref)
 		if err != nil {
 			if ws, ok := s.watches.get(ref); ok {
-				s.renderPreparing(w, ref, ws)
+				s.renderPreparing(w, r, ref, ws)
 				return
 			}
 			s.renderError(w, http.StatusBadGateway, "Failed to query FRS", err.Error())
@@ -348,7 +397,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 			// the preparing page (instead of falling through to the
 			// SFTP dial path, which would 502 because the FRS hasn't
 			// bound a Service yet).
-			s.renderPreparing(w, ref, &watchState{State: view.State, View: view, Done: true})
+			s.renderPreparing(w, r, ref, &watchState{State: view.State, View: view, Done: true})
 			return
 		}
 		http.Redirect(w, r, fmt.Sprintf("/sessions/%s/%s/connect", ref.Namespace, ref.Name), http.StatusSeeOther)
@@ -370,8 +419,9 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		"Entries":      entries,
 		"User":         s.auth.Username,
 		"Version":      s.version,
+		"CSRF":         s.auth.CSRFToken(r),
 	}); err != nil {
-		slog.Error("render browse", "err", err)
+		s.log(r.Context()).Error("render browse", "err", err)
 	}
 }
 
@@ -381,13 +431,14 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 // otherwise htmx injects the whole <html> into the wrapper and
 // the next poll wraps it in another layer (screen-in-screen).
 // Behaviour:
-//   Ready         -> 204 No Content + HX-Redirect. The browser
-//                     follows the redirect to /browse, which
-//                     renders the proper page from scratch.
-//   NotReady      -> 204 No Content (poll again in 2s).
-//   Failed/Timeout -> 200 + the preparing body fragment (no
-//                     layout) so the wrapper can swap it in
-//                     without nesting.
+//
+//	Ready         -> 204 No Content + HX-Redirect. The browser
+//	                  follows the redirect to /browse, which
+//	                  renders the proper page from scratch.
+//	NotReady      -> 204 No Content (poll again in 2s).
+//	Failed/Timeout -> 200 + the preparing body fragment (no
+//	                  layout) so the wrapper can swap it in
+//	                  without nesting.
 //
 // If the request did NOT come from htmx (no HX-Request header —
 // e.g. user typed the URL in the address bar, or back/forward
@@ -396,6 +447,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 // blank page).
 func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref k8s.FRSRef, path string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	log := s.log(r.Context())
 	htmxRequest := r.Header.Get("HX-Request") == "true"
 	notReady := func() {
 		if htmxRequest {
@@ -409,18 +461,18 @@ func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref 
 		if !ok {
 			ws = &watchState{State: "Pending", View: k8s.FRSView{Ref: ref}}
 		}
-		s.renderPreparing(w, ref, ws)
+		s.renderPreparing(w, r, ref, ws)
 	}
 	if ws, ok := s.watches.get(ref); ok {
 		switch ws.State {
 		case "Ready":
-			slog.Info("frs.partial.ready", "frs", ref.Namespace+"/"+ref.Name)
+			log.Info("frs.partial.ready", "frs", ref.Namespace+"/"+ref.Name)
 			w.Header().Set("HX-Redirect", "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path="+url.QueryEscape(path))
 			w.WriteHeader(http.StatusNoContent)
 			return
 		case "Failed", "Timeout":
-			slog.Info("frs.partial.terminal", "frs", ref.Namespace+"/"+ref.Name, "state", ws.State)
-			s.renderPreparingBody(w, ref, ws)
+			log.Info("frs.partial.terminal", "frs", ref.Namespace+"/"+ref.Name, "state", ws.State)
+			s.renderPreparingBody(w, r, ref, ws)
 			return
 		}
 	}
@@ -429,23 +481,23 @@ func (s *Server) handlePartialReady(w http.ResponseWriter, r *http.Request, ref 
 	// keep-polling.
 	view, err := s.frsGet(r.Context(), ref)
 	if err != nil {
-		slog.Warn("frs.partial.query", "frs", ref.Namespace+"/"+ref.Name, "err", err)
+		log.Warn("frs.partial.query", "frs", ref.Namespace+"/"+ref.Name, "err", err)
 		notReady()
 		return
 	}
 	switch view.State {
 	case "Ready":
-		slog.Info("frs.partial.ready", "frs", ref.Namespace+"/"+ref.Name)
+		log.Info("frs.partial.ready", "frs", ref.Namespace+"/"+ref.Name)
 		w.Header().Set("HX-Redirect", "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path="+url.QueryEscape(path))
 		w.WriteHeader(http.StatusNoContent)
 	case "Failed":
-		s.renderPreparingBody(w, ref, &watchState{State: "Failed", View: view, Done: true})
+		s.renderPreparingBody(w, r, ref, &watchState{State: "Failed", View: view, Done: true})
 	default:
 		notReady()
 	}
 }
 
-func (s *Server) renderPreparing(w http.ResponseWriter, ref k8s.FRSRef, ws *watchState) {
+func (s *Server) renderPreparing(w http.ResponseWriter, r *http.Request, ref k8s.FRSRef, ws *watchState) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
 		"Title":        "FRS preparing",
@@ -455,8 +507,9 @@ func (s *Server) renderPreparing(w http.ResponseWriter, ref k8s.FRSRef, ws *watc
 		"Error":        errString(ws.Err),
 		"User":         s.auth.Username,
 		"Version":      s.version,
+		"CSRF":         s.auth.CSRFToken(r),
 	}); err != nil {
-		slog.Error("render preparing", "err", err)
+		s.log(r.Context()).Error("render preparing", "err", err)
 	}
 }
 
@@ -466,14 +519,15 @@ func (s *Server) renderPreparing(w http.ResponseWriter, ref k8s.FRSRef, ws *watc
 // innerHTML-swaps it into the existing wrapper without ever
 // nesting a full <html> inside the page (the screen-in-screen
 // regression that the full-page renderPreparing would cause here).
-func (s *Server) renderPreparingBody(w http.ResponseWriter, ref k8s.FRSRef, ws *watchState) {
+func (s *Server) renderPreparingBody(w http.ResponseWriter, r *http.Request, ref k8s.FRSRef, ws *watchState) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "browse_preparing_body", map[string]any{
 		"FRS":   ref,
 		"State": ws.State,
 		"Error": errString(ws.Err),
+		"CSRF":  s.auth.CSRFToken(r),
 	}); err != nil {
-		slog.Error("render preparing body", "err", err)
+		s.log(r.Context()).Error("render preparing body", "err", err)
 	}
 }
 
@@ -550,13 +604,46 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rc.Close()
-	stat, _ := sess.Stat(path)
-	w.Header().Set("Content-Disposition", `attachment; filename="`+baseName(path)+`"`)
+	stat, statErr := sess.Stat(path)
+	if statErr != nil {
+		// Non-fatal: we can still stream the file without a
+		// Content-Length. Log it so a flaky FRS Stat is visible
+		// rather than silently swallowed.
+		s.log(r.Context()).Warn("download.stat.failed", "frs", ref.Namespace+"/"+ref.Name, "path", path, "err", statErr)
+	}
+	w.Header().Set("Content-Disposition", contentDispositionFilename(baseName(path)))
 	if stat != nil {
 		w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, rc)
+	n, _ := io.Copy(w, rc)
+	metrics.DownloadFilesTotal.WithLabelValues(ref.Namespace, ref.Name).Inc()
+	metrics.DownloadBytesTotal.WithLabelValues(ref.Namespace, ref.Name).Add(float64(n))
+}
+
+// contentDispositionFilename builds a Content-Disposition header value
+// that is safe for arbitrary file names. It emits both a plain
+// "filename=" (ASCII-sanitised fallback for legacy clients) and an
+// RFC 5987 "filename*=UTF-8”…" form so names with spaces, quotes, or
+// non-ASCII characters are conveyed correctly and can't break out of
+// the header. See RFC 6266 §5.
+func contentDispositionFilename(name string) string {
+	// ASCII fallback: replace anything outside a conservative set
+	// (and the quote/backslash that could break the quoted-string)
+	// with '_'.
+	var b strings.Builder
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f || r == '"' || r == '\\' || r > 0x7e {
+			b.WriteByte('_')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	ascii := b.String()
+	if ascii == "" {
+		ascii = "download"
+	}
+	return `attachment; filename="` + ascii + `"; filename*=UTF-8''` + url.PathEscape(name)
 }
 
 // handleDownloadZip streams a directory (or single file) from the FRS
@@ -785,7 +872,9 @@ func (s *Server) enrichFRSContext(ctx context.Context, list []k8s.FRSView) {
 	if len(list) == 0 {
 		return
 	}
-	slog.Info("sessions.enrich.start", "count", len(list))
+	// Internal fan-out, high frequency — Debug keeps the default
+	// Info log stream focused on user-visible operations.
+	s.log(ctx).Debug("sessions.enrich.start", "count", len(list))
 	for i := range list {
 		s.frs.LookupFRSSource(ctx, &list[i])
 	}

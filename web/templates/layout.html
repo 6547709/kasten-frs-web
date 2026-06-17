@@ -2,10 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{.Title}} — Kasten FRS Web Helper</title>
   <link rel="stylesheet" href="/static/veeam-theme.css">
-  <script src="/static/htmx.min.js"></script>
-  <script src="/static/app.js"></script>
+  <!-- defer: both scripts are parser-blocking in <head> otherwise.
+       htmx must load before app.js, and app.js already waits for
+       DOMContentLoaded, so deferred (in-order) execution is safe and
+       removes the render-blocking penalty. -->
+  <script defer src="/static/htmx.min.js"></script>
+  <script defer src="/static/app.js"></script>
 </head>
 <body data-page="{{.BodyTemplate}}">
 {{if eq .BodyTemplate "login_body"}}

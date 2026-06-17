@@ -2,6 +2,7 @@
   <div class="browse-actions">
     <form method="post" action="/sessions/{{.FRS.Namespace}}/{{.FRS.Name}}/delete"
           class="confirm-delete" data-confirm="End and delete FRS {{.FRS.Namespace}}/{{.FRS.Name}}?">
+      {{if .CSRF}}<input type="hidden" name="csrf_token" value="{{.CSRF}}">{{end}}
       <button type="submit" class="danger">End and delete FRS</button>
     </form>
   </div>
@@ -46,7 +47,7 @@
         </a>
         {{end}}
       </td>
-      <td class="size">{{if .Size}}{{.Size}} bytes{{else}}—{{end}}</td>
+      <td class="size">{{if .IsDir}}—{{else}}{{humanSize .Size}}{{end}}</td>
       <td class="modtime">{{.ModTime.Format "2006-01-02 15:04:05"}}</td>
       <td class="actions">
         {{if .IsDir}}
@@ -67,10 +68,12 @@
   <p>Waiting for <span id="elapsed">0</span> s</p>
   {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
   <form method="post" action="/wizard/cancel">
+    {{if .CSRF}}<input type="hidden" name="csrf_token" value="{{.CSRF}}">{{end}}
     <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
     <button type="submit" class="danger">Cancel and delete FRS</button>
   </form>
   <form method="post" action="/browse/extend" style="display:inline">
+    {{if .CSRF}}<input type="hidden" name="csrf_token" value="{{.CSRF}}">{{end}}
     <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
     <input type="hidden" name="sec" value="60">
     <button type="submit">Wait 60s more</button>

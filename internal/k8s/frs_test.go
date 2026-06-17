@@ -80,6 +80,56 @@ func TestListActiveFRS_FiltersExpiredAndInactive(t *testing.T) {
 	}
 }
 
+// makePendingFRS builds an active FRS that has NOT yet published its
+// SFTP transport (Pending). It should appear in ListActiveFRS with
+// Connectable=false rather than being silently dropped.
+func makePendingFRS(name, ns string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "datamover.kio.kasten.io/v1alpha1",
+		"kind":       "FileRecoverySession",
+		"metadata": map[string]any{
+			"name":              name,
+			"namespace":         ns,
+			"creationTimestamp": time.Now().Format(time.RFC3339),
+		},
+		"status": map[string]any{
+			"state": "Pending",
+			// no transports.sftp yet
+		},
+	}}
+}
+
+func TestListActiveFRS_IncludesPendingAsNonConnectable(t *testing.T) {
+	c := newTestClient(t)
+	ctx := context.Background()
+	gvr := schema.GroupVersionResource{Group: "datamover.kio.kasten.io", Version: "v1alpha1", Resource: "filerecoverysessions"}
+	for _, u := range []*unstructured.Unstructured{
+		makeFRS("ready-1", "ns-a", true, false),
+		makePendingFRS("pending-1", "ns-a"),
+	} {
+		if _, err := c.Dynamic().Resource(gvr).Namespace(u.GetNamespace()).Create(ctx, u, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := c.ListActiveFRS(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 FRS (ready + pending), got %d: %+v", len(got), got)
+	}
+	byName := map[string]FRSView{}
+	for _, v := range got {
+		byName[v.Ref.Name] = v
+	}
+	if !byName["ready-1"].Connectable {
+		t.Error("ready-1 should be Connectable")
+	}
+	if byName["pending-1"].Connectable {
+		t.Error("pending-1 should NOT be Connectable")
+	}
+}
+
 func TestListActiveFRS_NamespaceWhitelist(t *testing.T) {
 	c := newTestClient(t)
 	ctx := context.Background()

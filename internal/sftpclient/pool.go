@@ -103,6 +103,15 @@ func (p *Pool) Sweep() {
 // Client returns the underlying SFTP client used for new dials.
 func (p *Pool) Client() *Client { return p.client }
 
+// Len returns the current number of pooled sessions. Used to keep the
+// SFTPConnectionsActive gauge in sync without coupling this package to
+// the metrics package.
+func (p *Pool) Len() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return len(p.entries)
+}
+
 // CloseAllForFRS closes all pooled SFTP sessions associated with a particular FRS ref.
 // Called when the user clicks "End and delete" to release the helper's
 // connection promptly (instead of waiting for the 30m idle TTL).

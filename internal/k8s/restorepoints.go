@@ -51,8 +51,15 @@ type VolumeArtifact struct {
 // grouped by (appNamespace, appName).
 // namespaces is an optional allow-list (nil = all namespaces).
 func (c *Client) ListVMs(ctx context.Context, namespaces []string) ([]VM, error) {
-	u, err := c.dyn.Resource(RestorePointGVR).Namespace("").List(ctx, metav1.ListOptions{})
+	// Filter to virtualMachine RestorePoints on the apiserver side so
+	// we don't drag back (and then discard) every non-VM RP across
+	// the cluster. The client-side label reads below still apply for
+	// grouping by appName/appNamespace.
+	u, err := c.dyn.Resource(RestorePointGVR).Namespace("").List(ctx, metav1.ListOptions{
+		LabelSelector: "k10.kasten.io/appType=virtualMachine",
+	})
 	if err != nil {
+		recordK8sError("list_vms", "", err)
 		return nil, fmt.Errorf("list restorepoints: %w", err)
 	}
 	allow := make(map[string]bool, len(namespaces))
@@ -104,7 +111,9 @@ func (c *Client) ListVMs(ctx context.Context, namespaces []string) ([]VM, error)
 // least one appType=virtualMachine RestorePoint. Used to populate the
 // namespace selector on the wizard's first step.
 func (c *Client) ListVMNamespaces(ctx context.Context) ([]string, error) {
-	u, err := c.dyn.Resource(RestorePointGVR).Namespace("").List(ctx, metav1.ListOptions{})
+	u, err := c.dyn.Resource(RestorePointGVR).Namespace("").List(ctx, metav1.ListOptions{
+		LabelSelector: "k10.kasten.io/appType=virtualMachine",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list restorepoints: %w", err)
 	}
@@ -196,8 +205,8 @@ func (c *Client) GetRestorePointDetails(ctx context.Context, ns, name string) ([
 // K10 has historically returned two different shapes depending on
 // version + the deployment profile that produced the snapshot:
 //
-//   flat:   {"artifacts":[{"kind":"PersistentVolumeClaim","name":"data-pvc",...}]}
-//   nested: {"status":{"restorePointDetails":{"artifacts":[{"meta":{"spec":{"resource":"persistentvolumeclaims","name":"data-pvc",...}}}]}}}
+//	flat:   {"artifacts":[{"kind":"PersistentVolumeClaim","name":"data-pvc",...}]}
+//	nested: {"status":{"restorePointDetails":{"artifacts":[{"meta":{"spec":{"resource":"persistentvolumeclaims","name":"data-pvc",...}}}]}}}
 //
 // Older deployments and unit tests use the flat shape; newer K10
 // (the version our wizard is running against) uses the nested

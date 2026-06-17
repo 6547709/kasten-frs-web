@@ -64,9 +64,21 @@
     const el = document.getElementById('elapsed');
     if (!el) return;
     const start = Date.now();
-    setInterval(function () {
+    let id = setInterval(function () {
       el.textContent = Math.floor((Date.now() - start) / 1000);
     }, 1000);
+    // Stop ticking when the element leaves the DOM (htmx swaps the
+    // preparing wrapper on terminal/ready states) or the page is
+    // hidden, so we don't leak a 1s timer for the life of the tab.
+    function stop() {
+      if (id) { clearInterval(id); id = null; }
+    }
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stop();
+    });
+    document.body.addEventListener('htmx:afterSwap', function () {
+      if (!document.body.contains(el)) stop();
+    });
   }
 
   // ---------- /wizard ----------
@@ -166,9 +178,20 @@
       const checked = cbs.filter(function (x) { return x.checked; });
       submit.disabled = checked.length === 0;
       if (pvcFields) {
-        pvcFields.innerHTML = checked.map(function (v) {
-          return '<input type="hidden" name="pvcNames" value="' + v.value + '">';
-        }).join('');
+        // Build the hidden pvcNames mirror with createElement instead
+        // of innerHTML string concatenation. PVC names come from the
+        // K8s API (and ultimately the FRS server) and could in theory
+        // contain markup; setting .value on a real element treats the
+        // string as data, never as HTML, so it can't break out of the
+        // attribute and inject script.
+        pvcFields.textContent = '';
+        checked.forEach(function (v) {
+          var inp = document.createElement('input');
+          inp.type = 'hidden';
+          inp.name = 'pvcNames';
+          inp.value = v.value;
+          pvcFields.appendChild(inp);
+        });
       }
     }
     window.__kfrsRefreshVolumes = enableSubmitIfVolumesPresent;

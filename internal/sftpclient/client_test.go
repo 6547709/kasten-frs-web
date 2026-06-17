@@ -78,3 +78,30 @@ func TestClient_DialListRead(t *testing.T) {
 		t.Errorf("content = %q", b)
 	}
 }
+
+func TestValidatePath(t *testing.T) {
+	cases := []struct {
+		in string
+		ok bool
+	}{
+		{"/", true},
+		{"/data", true},
+		{"/data/file..name", true}, // dots in a name are fine
+		{"/x/.hidden", true},       // hidden file is fine
+		{"/a/b/c", true},
+		{"", false},               // empty
+		{"relative/path", false},  // not absolute
+		{"/../etc/passwd", false}, // escapes root
+		{"/a/../../etc", false},   // interleaved escape
+		{"..", false},
+	}
+	for _, c := range cases {
+		err := validatePath(c.in)
+		if c.ok && err != nil {
+			t.Errorf("validatePath(%q) = %v, want nil", c.in, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("validatePath(%q) = nil, want error", c.in)
+		}
+	}
+}

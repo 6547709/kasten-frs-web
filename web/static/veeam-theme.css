@@ -577,3 +577,29 @@ button.danger:hover { background: #D03030; }
 .browse-preparing h1 { font-size: 18px; color: #4A5560; margin-bottom: 16px; }
 .browse-preparing .err { color: #B02020; margin: 16px 0; }
 .empty { color: #8A95A2; font-style: italic; padding: 12px; }
+
+/* ---------- Responsive ---------- */
+/* The shell is desktop-first (the K10 dashboard it mirrors is too),
+   but operators do open this from tablets/phones during a recovery.
+   At <=768px we collapse the wizard's three-column picker into a
+   single stacked column, let the ribbon nav wrap, and make tables
+   scroll horizontally instead of squashing. */
+@media (max-width: 768px) {
+  .wizard-grid {
+    grid-template-columns: 1fr;
+  }
+  .ribbon {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 8px 12px;
+    row-gap: 6px;
+  }
+  .ribbon .spacer { flex-basis: 100%; }
+  .workarea { padding: 12px; }
+  /* Tables: allow horizontal scroll rather than column squash. */
+  .simple-table, .filelist {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}

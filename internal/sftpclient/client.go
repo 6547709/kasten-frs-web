@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -226,9 +227,34 @@ type netAddrError struct{ s string }
 
 func (e *netAddrError) Error() string { return "invalid address: " + e.s }
 
+// validatePath rejects any path that is not a clean absolute path
+// rooted at "/". It explicitly rejects any ".." path SEGMENT (rather
+// than the old strings.Contains(p, "..") substring check, which both
+// rejected legitimate names like "/data/file..name" and could be
+// fooled). Rejecting traversal segments outright — instead of relying
+// on path.Clean to silently resolve them — is the safer choice: we
+// never want to second-guess what a "/a/../../etc" the caller
+// "really meant"; we refuse it.
 func validatePath(p string) error {
-	if strings.Contains(p, "..") {
-		return errors.New("invalid path")
+	if p == "" {
+		return errors.New("invalid path: empty")
+	}
+	// Must be absolute: the FRS SFTP root is "/", and all browse/
+	// download handlers build absolute paths.
+	if !strings.HasPrefix(p, "/") {
+		return errors.New("invalid path: must be absolute")
+	}
+	// Reject any ".." that appears as a whole segment. Splitting on
+	// "/" means "file..name" (a name that merely contains dots) is
+	// allowed, while "/a/../b" (a traversal segment) is refused.
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return errors.New("invalid path: contains parent-directory segment")
+		}
+	}
+	// Defence in depth: the normalised form must still be absolute.
+	if !strings.HasPrefix(path.Clean(p), "/") {
+		return errors.New("invalid path: not rooted after normalisation")
 	}
 	return nil
 }

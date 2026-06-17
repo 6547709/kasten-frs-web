@@ -36,10 +36,16 @@
       </td>
       <td class="action" style="text-align:right">
         <form method="post" action="/sessions/{{.Ref.Namespace}}/{{.Ref.Name}}/connect" style="display:inline">
+          {{if $.CSRF}}<input type="hidden" name="csrf_token" value="{{$.CSRF}}">{{end}}
+          {{if .Connectable}}
           <button type="submit">Browse ›</button>
+          {{else}}
+          <button type="submit" disabled title="FRS is still preparing — its SFTP transport is not ready yet">Preparing…</button>
+          {{end}}
         </form>
         <form method="post" action="/sessions/{{.Ref.Namespace}}/{{.Ref.Name}}/delete" style="display:inline"
               class="confirm-delete" data-confirm="End and delete FRS {{.Ref.Namespace}}/{{.Ref.Name}}?">
+          {{if $.CSRF}}<input type="hidden" name="csrf_token" value="{{$.CSRF}}">{{end}}
           <button type="submit" class="danger">End</button>
         </form>
       </td>

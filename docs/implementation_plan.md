@@ -498,3 +498,32 @@ echo "Helper URL: https://$ROUTE_URL"
 
 > [!TIP]
 > 如果需要，我可以逐项实现以上修复。请告知需要优先处理的事项。
+
+---
+
+## 五、修复实施记录（v0.3.26）
+
+本轮已按 P0 → P1 → P2 全量修复上述 14 项问题，全部测试通过（`go vet` 干净，`go test ./...` 全绿）。
+
+| # | 问题 | 状态 | 关键改动 |
+|---|------|------|----------|
+| 1 | XSS（app.js innerHTML） | ✅ | 改用 `createElement`/`textContent` 构建隐藏 `pvcNames` 字段 |
+| 2 | Session Cookie 仅靠 Max-Age | ✅ | Cookie 内嵌签发时间戳并纳入 HMAC；`Verify` 服务端校验 `issued+TTL>now` |
+| 3 | doK8sRequest BearerToken | ✅ | 改用 `rest.HTTPClientFor(cfg)`，自动处理 BearerTokenFile 与刷新 |
+| 4 | buildFRSView 隐藏 Pending | ✅ | 新增 `FRSView.Connectable`；Pending FRS 仍列出，Browse 按钮禁用 |
+| 5 | LookupFRSSource List→Get | ✅ | 用 `Get(name)` 替代全量 List + 遍历 |
+| 6 | ListVMs 无 LabelSelector | ✅ | 加 `k10.kasten.io/appType=virtualMachine` 服务端过滤 |
+| 7 | 缺 Request ID 关联日志 | ✅ | `AccessLog` 生成 `request_id` 注入 context + `X-Request-Id` 响应头；handler 改用上下文 logger |
+| 8 | 缺 CSRF 保护 | ✅ | 基于 session cookie 的无状态 HMAC CSRF token；`RequireAuth` 对不安全方法强制校验；表单注入隐藏字段 |
+| 9 | 缺启动配置摘要日志 | ✅ | `main.go` 启动日志补全关键配置（掩码敏感值） |
+| 10 | Recoverer 用 fmt.Printf | ✅ | 改用 `slog.Error("panic.recovered", ...)` + request_id |
+| 11 | initBrowsePreparing 不清理 interval | ✅ | 页面隐藏/元素移除时 `clearInterval` |
+| 12 | handleDownload 忽略 Stat 错误 | ✅ | 记录 warn 日志，仍可流式下载 |
+| 13 | 文件名未 RFC 5987 编码 | ✅ | `contentDispositionFilename` 输出 ASCII 回退 + `filename*=UTF-8''` |
+| — | validatePath 不完整 | ✅ | 改为按 `/` 分段拒绝 `..` 段，允许 `file..name` 等合法名 |
+| — | watchMap 无过期清理 | ✅ | `watchState.createdAt` + 后台 sweeper（10m 扫描、1h 过期） |
+| — | viewport / 响应式 / defer | ✅ | 加 viewport meta、`script defer`、`@media(max-width:768px)` 单列布局 |
+| — | 文件大小友好格式化 | ✅ | 新增 `humanSize` 模板函数（KiB/MiB/…） |
+| — | Prometheus metrics 接入 | ✅ | login / FRS list / SFTP connect / download / K8s error 实际打点 |
+
+新增/强化的单元测试：会话过期与时间戳防篡改、CSRF token 往返与跨会话拒绝、Pending FRS 可见性、`validatePath` 表驱动用例、watchMap sweep、CSRF 端到端（mux 层 403/放行）。
