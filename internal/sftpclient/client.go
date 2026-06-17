@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"regexp"
 	"strconv"
@@ -77,7 +78,13 @@ func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 	if err := validatePath(path); err != nil {
 		return nil, err
 	}
-	return s.sftp.ReadDir(path)
+	infos, err := s.sftp.ReadDir(path)
+	if err != nil {
+		slog.Warn("sftp.listdir.failed", "path", path, "err", err)
+		return nil, err
+	}
+	slog.Info("sftp.listdir", "path", path, "count", len(infos))
+	return infos, nil
 }
 
 // Open returns a ReadCloser for a file at path.
@@ -87,8 +94,10 @@ func (s *Session) Open(path string) (io.ReadCloser, error) {
 	}
 	f, err := s.sftp.Open(path)
 	if err != nil {
+		slog.Warn("sftp.open.failed", "path", path, "err", err)
 		return nil, err
 	}
+	slog.Info("sftp.open", "path", path)
 	return f, nil
 }
 
@@ -104,8 +113,20 @@ func (s *Session) Stat(path string) (os.FileInfo, error) {
 // key signature is supplied per-call so a single Client can serve dials to
 // FRSs with different host keys without locking.
 func (c *Client) Dial(ctx context.Context, addr, hostKeySig string) (*Session, error) {
+	// Log the dial target with a truncated key fingerprint so
+	// operators can correlate "i/o timeout" with the FRS+key
+	// pair in the cluster without leaking the full secret.
+	slog.Info("sftp.dial.start",
+		"user", c.username, "addr", addr,
+		"host_key_sig", shortHostKeySig(hostKeySig),
+	)
 	hostKey, err := ParseHostKeySignature(hostKeySig)
 	if err != nil {
+		slog.Warn("sftp.dial.parse-host-key",
+			"addr", addr,
+			"host_key_sig", shortHostKeySig(hostKeySig),
+			"err", err,
+		)
 		return nil, fmt.Errorf("parse host key: %w", err)
 	}
 	cfg := &ssh.ClientConfig{
@@ -116,14 +137,40 @@ func (c *Client) Dial(ctx context.Context, addr, hostKeySig string) (*Session, e
 	}
 	sshConn, err := ssh.Dial("tcp", addr, cfg)
 	if err != nil {
+		slog.Warn("sftp.dial.failed",
+			"addr", addr,
+			"host_key_sig", shortHostKeySig(hostKeySig),
+			"err", err,
+		)
 		return nil, fmt.Errorf("ssh dial: %w", err)
 	}
 	sc, err := sftp.NewClient(sshConn)
 	if err != nil {
 		_ = sshConn.Close()
+		slog.Warn("sftp.client.failed", "addr", addr, "err", err)
 		return nil, fmt.Errorf("sftp client: %w", err)
 	}
+	slog.Info("sftp.dial.ready", "addr", addr, "user", c.username)
 	return &Session{sftp: sc, ssh: sshConn}, nil
+}
+
+// shortHostKeySig returns the host:port prefix of a Kasten-style
+// signature for log correlation. We deliberately don't log the full
+// signature so that logs don't leak long-lived key material.
+func shortHostKeySig(sig string) string {
+	if sig == "" {
+		return ""
+	}
+	// Format is "[host:port] alg base64"; take the bracketed host
+	// spec verbatim.
+	end := strings.Index(sig, "]")
+	if end < 0 || end+1 >= len(sig) {
+		if len(sig) > 64 {
+			return sig[:64] + "…"
+		}
+		return sig
+	}
+	return sig[:end+1]
 }
 
 // hostKeySigRe parses "[host]:port alg base64..." (the format Kasten

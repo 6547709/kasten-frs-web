@@ -76,9 +76,11 @@ func (s *Server) handleWizardPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWizardNamespaces(w http.ResponseWriter, r *http.Request) {
 	nsList, err := s.frsListVMNamespaces(r.Context())
 	if err != nil {
+		slog.Warn("wizard.nslist.failed", "user", s.auth.Username, "err", err)
 		s.renderError(w, http.StatusBadGateway, "Namespace 列表拉取失败", err.Error())
 		return
 	}
+	slog.Info("wizard.nslist", "user", s.auth.Username, "count", len(nsList))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "wizard_namespaces_fragment", map[string]any{
 		"NSList": nsList,
@@ -93,15 +95,18 @@ func (s *Server) handleWizardNamespaces(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleWizardVMs(w http.ResponseWriter, r *http.Request) {
 	var vms []k8s.VM
 	var err error
-	if ns := r.URL.Query().Get("ns"); ns != "" {
+	ns := r.URL.Query().Get("ns")
+	if ns != "" {
 		vms, err = s.frs.ListVMs(r.Context(), []string{ns})
 	} else {
 		vms, err = s.frsListVMs(r.Context())
 	}
 	if err != nil {
+		slog.Warn("wizard.vmlist.failed", "user", s.auth.Username, "ns", ns, "err", err)
 		s.renderError(w, http.StatusBadGateway, "VM 列表拉取失败", err.Error())
 		return
 	}
+	slog.Info("wizard.vmlist", "user", s.auth.Username, "ns", ns, "count", len(vms))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "wizard_vms_fragment", map[string]any{
 		"VMs": vms,

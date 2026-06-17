@@ -265,14 +265,31 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	addr := fmt.Sprintf("%s.%s.svc.cluster.local:%d", view.ServiceName, view.ServiceNS, view.Port)
+	slog.Info("sftp.connect.start",
+		"user", s.auth.Username,
+		"frs", ns+"/"+name,
+		"service", view.ServiceName+"."+view.ServiceNS,
+		"port", view.Port,
+	)
 	sess, err := s.pool.Client().Dial(r.Context(), addr, view.HostKeySig)
 	if err != nil {
+		slog.Error("sftp.connect.failed",
+			"user", s.auth.Username,
+			"frs", ns+"/"+name,
+			"addr", addr,
+			"err", err,
+		)
 		s.renderError(w, http.StatusBadGateway, "SFTP 连接失败", err.Error())
 		return
 	}
 	uid := userIDFromCookie(r, s.auth.CookieName)
 	key := sftpclient.SessionKey{UserSessionID: uid, FRS: types.NamespacedName{Namespace: ns, Name: name}}
 	s.pool.Store(key, sess)
+	slog.Info("sftp.connect.ready",
+		"user", s.auth.Username,
+		"frs", ns+"/"+name,
+		"addr", addr,
+	)
 	http.Redirect(w, r, "/browse?frs="+ns+"/"+name+"&path=/", http.StatusSeeOther)
 }
 

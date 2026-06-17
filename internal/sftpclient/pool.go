@@ -1,6 +1,7 @@
 package sftpclient
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 
@@ -49,14 +50,20 @@ func (p *Pool) Get(key SessionKey) (*Session, bool) {
 	defer p.mu.Unlock()
 	e, ok := p.entries[key]
 	if !ok {
+		slog.Debug("sftp.pool.miss", "frs", key.FRS.Namespace+"/"+key.FRS.Name)
 		return nil, false
 	}
 	if time.Since(e.lastUsedAt) > p.ttl {
+		slog.Info("sftp.pool.expired",
+			"frs", key.FRS.Namespace+"/"+key.FRS.Name,
+			"idle", time.Since(e.lastUsedAt).String(),
+		)
 		delete(p.entries, key)
 		go e.sess.Close()
 		return nil, false
 	}
 	e.lastUsedAt = time.Now()
+	slog.Debug("sftp.pool.hit", "frs", key.FRS.Namespace+"/"+key.FRS.Name)
 	return e.sess, true
 }
 
@@ -85,6 +92,9 @@ func (p *Pool) Sweep() {
 		}
 	}
 	p.mu.Unlock()
+	if n := len(toClose); n > 0 {
+		slog.Info("sftp.pool.sweep", "closed", n)
+	}
 	for _, s := range toClose {
 		_ = s.Close()
 	}

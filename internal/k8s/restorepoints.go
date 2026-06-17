@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -163,7 +164,31 @@ func (c *Client) GetRestorePointDetails(ctx context.Context, ns, name string) ([
 	if err != nil {
 		return nil, fmt.Errorf("get rp details: %w", err)
 	}
-	return parseDetailsPVCs(body)
+	arts, err := parseDetailsPVCs(body)
+	if err != nil {
+		// Body parse error: log enough context to debug a
+		// non-standard deployment without dumping the entire
+		// (potentially huge) payload.
+		slog.Error("rp.details.parse.failed",
+			"rp", ns+"/"+name,
+			"body_bytes", len(body),
+			"body_head", snippet(body),
+			"err", err,
+		)
+		return nil, err
+	}
+	if len(arts) == 0 {
+		slog.Warn("rp.details.empty",
+			"rp", ns+"/"+name,
+			"body_bytes", len(body),
+			"body_head", snippet(body),
+		)
+	}
+	slog.Info("rp.details.ok",
+		"rp", ns+"/"+name,
+		"artifacts", len(arts),
+	)
+	return arts, nil
 }
 
 // parseDetailsPVCs extracts PVC artifacts from the RestorePoint /details JSON body.
