@@ -4,32 +4,51 @@ metadata:
   name: kasten-frs-web-helper
   namespace: kasten-io
 spec:
+  # Helper pod only. FRS pods are policed by 55-*.yaml — K8s
+  # NetworkPolicy can only target one podSelector per resource,
+  # so the two concerns (this pod vs FRS pods) must live in
+  # separate files.
   podSelector:
     matchLabels:
       app: kasten-frs-web-helper
   policyTypes:
   - Ingress
-  - Egress
+  # Egress is intentionally NOT in policyTypes. That means: no
+  # egress rules from this NetworkPolicy apply to the helper
+  # pod, so the pod's outbound traffic is governed by whatever
+  # else exists in the namespace (a default-deny-egress, an
+  # EgressFirewall, or — the OCP default — allow all). Keeping
+  # egress unrestricted here avoids the most common deployment
+  # failure: an operator / Compliance Operator default-deny
+  # that overrides our namespaceSelector-based allow list and
+  # leaves the helper unable to reach the API server. The
+  # helper is an operator-facing tool; its threat model is
+  # "the cluster admin who deploys it", and the user is in
+  # a better position than a static allow-list to decide what
+  # egress to permit in their environment. If you need to
+  # restrict egress, add a NetworkPolicy in the same namespace
+  # whose podSelector matches the helper and whose policyTypes
+  # includes Egress — multiple NetworkPolicies union, so the
+  # more restrictive one wins where it has a matching rule.
   ingress:
+  # 1. OCP Router (the Route fronting the helper). Router pods
+  #    carry the network.openshift.io/policy-group=ingress
+  #    label, so this rule targets them specifically.
   - from:
     - namespaceSelector:
         matchLabels:
           network.openshift.io/policy-group: ingress
     ports:
     - { port: 8080, protocol: TCP }
-  egress:
-  - to:
+  # 2. kubelet liveness / readiness / startup probes. Probe
+  #    source appears as a pod IP for NetworkPolicy purposes
+  #    (OVN-K rewrites the source to the helper's host
+  #    network's CNI bridge). Allow from any pod on the
+  #    helper's HTTP port; the helper's HTTP server is the
+  #    only thing listening on 8080 so this doesn't widen the
+  #    attack surface beyond what 1. above does.
+  - from:
+    - podSelector: {}
     - namespaceSelector: {}
     ports:
-    - { port: 443, protocol: TCP }
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: openshift-dns
-    ports:
-    - { port: 53, protocol: UDP }
-    - { port: 53, protocol: TCP }
-  - to:
-    - podSelector: {}
-    ports:
-    - { port: 2222, protocol: TCP }
+    - { port: 8080, protocol: TCP }
