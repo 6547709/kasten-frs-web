@@ -19,12 +19,16 @@ spec:
       # OCP restricted-v2 SCC requires runAsUser to fall inside the
       # namespace's allocated UID range (MustRunAsRange); pinning
       # runAsUser: 1001 fails admission in `kasten-io` because the
-      # range is 1001100000/10000. Let the SCC pick a UID, and pin
-      # fsGroup to the range base so /tmp and /app/.cache emptyDirs
-      # are writable for the chosen user. See spec doc for details.
+      # range is 1001100000/10000. Let the SCC pick a UID. Same
+      # logic applies to fsGroup — let the SCC pick it so the
+      # chosen fsGroup lines up with the chosen runAsUser (and
+      # therefore with the emptyDir volumes the pod mounts at
+      # /tmp and /app/.cache). Pinning fsGroup here was causing
+      # admission failures in some clusters where the chosen
+      # runAsUser and the pinned fsGroup landed on opposite
+      # sides of the SCC's MustRunAsRange constraint.
       securityContext:
         runAsNonRoot: true
-        fsGroup: 1001100000
         seccompProfile: { type: RuntimeDefault }
       containers:
       - name: helper
