@@ -13,23 +13,23 @@ spec:
       app: kasten-frs-web-helper
   policyTypes:
   - Ingress
-  # Egress is intentionally NOT in policyTypes. That means: no
-  # egress rules from this NetworkPolicy apply to the helper
-  # pod, so the pod's outbound traffic is governed by whatever
-  # else exists in the namespace (a default-deny-egress, an
-  # EgressFirewall, or — the OCP default — allow all). Keeping
-  # egress unrestricted here avoids the most common deployment
-  # failure: an operator / Compliance Operator default-deny
-  # that overrides our namespaceSelector-based allow list and
-  # leaves the helper unable to reach the API server. The
-  # helper is an operator-facing tool; its threat model is
-  # "the cluster admin who deploys it", and the user is in
-  # a better position than a static allow-list to decide what
-  # egress to permit in their environment. If you need to
-  # restrict egress, add a NetworkPolicy in the same namespace
-  # whose podSelector matches the helper and whose policyTypes
-  # includes Egress — multiple NetworkPolicies union, so the
-  # more restrictive one wins where it has a matching rule.
+  - Egress
+  # Egress: explicit allow-all. The single empty rule `{}` matches
+  # any destination, any port, any protocol — i.e. "all egress
+  # traffic is permitted from this pod". We do this rather than
+  # omitting Egress from policyTypes because, in K8s, multiple
+  # NetworkPolicies are UNION: a namespace-scoped default-deny-
+  # egress (e.g. one applied by Compliance Operator or by hand
+  # for hardening) will still apply to the helper if our policy
+  # is silent on egress. Including an explicit allow-all egress
+  # rule here means the helper's outbound traffic is permitted
+  # regardless of any default-deny elsewhere in the namespace.
+  # The helper is an operator-facing tool; its threat model is
+  # "the cluster admin who deploys it", and the admin is in a
+  # better position than a static allow-list to decide what
+  # egress to permit in their environment.
+  egress:
+  - {}
   ingress:
   # 1. OCP Router (the Route fronting the helper). Router pods
   #    carry the network.openshift.io/policy-group=ingress
