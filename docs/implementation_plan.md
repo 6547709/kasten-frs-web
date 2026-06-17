@@ -527,3 +527,22 @@ echo "Helper URL: https://$ROUTE_URL"
 | — | Prometheus metrics 接入 | ✅ | login / FRS list / SFTP connect / download / K8s error 实际打点 |
 
 新增/强化的单元测试：会话过期与时间戳防篡改、CSRF token 往返与跨会话拒绝、Pending FRS 可见性、`validatePath` 表驱动用例、watchMap sweep、CSRF 端到端（mux 层 403/放行）。
+
+---
+
+## 六、显示所有 FRS（含 Failed）（v0.3.27）
+
+**背景**：OpenShift 环境中，FRS 创建超时后状态变为 `Failed`，K10 会删除 `kasten-io` 命名空间下的 `frs-xxx` pod，但 FRS CR 对象仍残留在集群中。原 `ListActiveFRS` 用 `isActiveState` 过滤掉了 `Failed/Succeeded/Terminated`，又按 `ExpiryTime` 过滤掉已过期项 —— 导致这些"垃圾 FRS"在页面上完全不可见，操作者无从清理，越积越多。
+
+**修复**：
+- `FRSView` 新增 `Terminal bool` 字段（`Failed/Succeeded/Terminated` 为 true）。
+- 新增 `Client.ListAllFRS`，与 `ListActiveFRS` 共用 `listFRS(includeTerminal)` 核心；前者返回全部（含终态/过期），后者保持旧语义。
+- sessions handler 改用 `ListAllFRS`，`FRSProvider` 接口同步新增方法。
+- sessions 模板按状态分支渲染动作：
+  - **Ready 且 Connectable 且非终态** → `Browse ›` + `Delete`
+  - **终态（Failed 等）** → 禁用的 `Unavailable` + `Delete`
+  - **其它非就绪（Pending/Running）** → 禁用的 `Preparing…` + `Delete`
+- "Remaining" 列对终态/无过期时间的 FRS 显示 `—`，不再渲染倒计时。
+- CSS 补充 `succeeded/terminated/pending/running/starting` badge 配色与禁用按钮样式。
+
+新增测试：`TestListAllFRS_IncludesTerminalAndExpired`（验证 ListActiveFRS 只留 1 条、ListAllFRS 返回全部 4 条，且 Terminal/Connectable 标志正确）。

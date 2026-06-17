@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.27 (2026-06-17)
+
+- sessions: list ALL FileRecoverySessions, including Failed / Succeeded
+  / Terminated and expired ones. Previously a timed-out FRS (which goes
+  Failed and has its frs-xxx pod torn down by K10) disappeared from the
+  UI, leaving operators unable to clean up the accumulating CR objects.
+  Non-Ready rows now render with only a Delete action; the expiry
+  countdown is suppressed for terminal/expired sessions.
+  - k8s: new `ListAllFRS`; `FRSView.Terminal` flag
+  - ui: state-aware action column + badge styling
+
 ## 0.3.26 (2026-06-17)
 
 Security, observability, and UX hardening from the full code review

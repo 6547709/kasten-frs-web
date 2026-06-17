@@ -127,6 +127,7 @@ func joinPath(parent, leaf string) string {
 // on top of the original ListActiveFRS / GetFRS pair.
 type FRSProvider interface {
 	ListActiveFRS(ctx context.Context, namespaces []string) ([]k8s.FRSView, error)
+	ListAllFRS(ctx context.Context, namespaces []string) ([]k8s.FRSView, error)
 	GetFRS(ctx context.Context, ref k8s.FRSRef) (k8s.FRSView, error)
 	ListVMs(ctx context.Context, namespaces []string) ([]k8s.VM, error)
 	ListVMNamespaces(ctx context.Context) ([]string, error)
@@ -274,7 +275,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	frsList, err := s.frs.ListActiveFRS(r.Context(), s.nsWhitelist)
+	// List ALL FRSes (including Failed/Succeeded/Terminated and
+	// expired) so operators can see and clean up garbage CRs left
+	// behind when a session times out and K10 deletes its pod. Rows
+	// that aren't Ready/Connectable render with only a Delete action.
+	frsList, err := s.frs.ListAllFRS(r.Context(), s.nsWhitelist)
 	if err != nil {
 		metrics.FRSListTotal.WithLabelValues("error").Inc()
 		s.renderError(w, http.StatusBadGateway, "Failed to list FRSes", err.Error())

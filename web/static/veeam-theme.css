@@ -338,6 +338,11 @@ a:hover { text-decoration: underline; }
 }
 .simple-table td .badge.ready  { background: #E6F4EA; color: var(--k10-ok); }
 .simple-table td .badge.failed { background: #FCE8E6; color: var(--k10-err); }
+.simple-table td .badge.succeeded { background: #E6F4EA; color: var(--k10-ok); }
+.simple-table td .badge.terminated { background: #EEF0F2; color: #6B7480; }
+.simple-table td .badge.pending,
+.simple-table td .badge.running,
+.simple-table td .badge.starting { background: #E8F0FE; color: #1A56C4; }
 .simple-table td.action {
   white-space: nowrap;
   text-align: right;
@@ -355,6 +360,13 @@ a:hover { text-decoration: underline; }
   cursor: pointer;
 }
 .simple-table td.action button:hover { background: var(--k10-accent-hover); }
+.simple-table td.action button[disabled] {
+  background: #EEF0F2;
+  color: #9AA3AD;
+  border-color: #D6DAE0;
+  cursor: not-allowed;
+}
+.simple-table td.action button[disabled]:hover { background: #EEF0F2; }
 .badge.warn { background: #FFF4D6; color: #8A6A0A; border-color: #E6C97A; }
 .badge.crit { background: #FFE0E0; color: #B02020; border-color: #D97070; }
 button.danger { background: #B02020; color: #fff; border-color: #B02020; }

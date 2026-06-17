@@ -65,6 +65,12 @@ type FRSView struct {
 	// showing in the sessions list, but its Browse action must
 	// be disabled until Connectable flips true.
 	Connectable bool
+	// Terminal is true for FRSes in a non-recoverable end state
+	// (Failed / Succeeded / Terminated). These can no longer become
+	// connectable — e.g. a timed-out FRS goes Failed and K10 tears
+	// down its frs-xxx pod — so the UI only offers a Delete action
+	// for them, letting operators clean up the leftover CR objects.
+	Terminal bool
 }
 
 // FRSGroupVersionResource is the GVR for FileRecoverySession.
@@ -73,7 +79,28 @@ var FRSGroupVersionResource = schema.GroupVersionResource{
 }
 
 // ListActiveFRS returns FRSViews filtered to active+non-expired entries.
+// Kept for callers that only care about live sessions; the UI session
+// list uses ListAllFRS so operators can also see (and clean up)
+// terminal/expired FRSes.
 func (c *Client) ListActiveFRS(ctx context.Context, namespaces []string) ([]FRSView, error) {
+	return c.listFRS(ctx, namespaces, false)
+}
+
+// ListAllFRS returns every FRSView in the (optionally whitelisted)
+// namespaces, INCLUDING terminal (Failed/Succeeded/Terminated) and
+// expired sessions. This is what the sessions page renders: a timed-out
+// FRS flips to Failed and K10 deletes its frs-xxx pod, but the FRS CR
+// lingers in the cluster. Hiding those left the operator with no way to
+// see — let alone delete — the accumulating garbage. Now they all show
+// up, with non-Ready rows offering only a Delete action.
+func (c *Client) ListAllFRS(ctx context.Context, namespaces []string) ([]FRSView, error) {
+	return c.listFRS(ctx, namespaces, true)
+}
+
+// listFRS is the shared listing core. When includeTerminal is false it
+// drops terminal-state and expired FRSes (legacy ListActiveFRS
+// behaviour); when true it returns everything.
+func (c *Client) listFRS(ctx context.Context, namespaces []string, includeTerminal bool) ([]FRSView, error) {
 	u, err := c.dyn.Resource(FRSGroupVersionResource).Namespace("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		recordK8sError("list_frs", "", err)
@@ -98,11 +125,13 @@ func (c *Client) ListActiveFRS(ctx context.Context, namespaces []string) ([]FRSV
 		// list with Browse disabled so users can see in-flight
 		// sessions instead of them silently vanishing.
 		view, _ := buildFRSView(item)
-		if !isActiveState(view.State) {
-			continue
-		}
-		if !view.ExpiryTime.IsZero() && now.After(view.ExpiryTime) {
-			continue
+		if !includeTerminal {
+			if !isActiveState(view.State) {
+				continue
+			}
+			if !view.ExpiryTime.IsZero() && now.After(view.ExpiryTime) {
+				continue
+			}
 		}
 		out = append(out, view)
 	}
@@ -117,11 +146,16 @@ func (c *Client) ListActiveFRS(ctx context.Context, namespaces []string) ([]FRSV
 // not populate status.state early; the FRS is still observable and
 // expirable via the watch loop).
 func isActiveState(s string) bool {
+	return !isTerminalState(s)
+}
+
+// isTerminalState reports whether s is a non-recoverable end state.
+func isTerminalState(s string) bool {
 	switch s {
 	case "Failed", "Succeeded", "Terminated":
-		return false
+		return true
 	}
-	return true
+	return false
 }
 
 func buildFRSView(item *unstructured.Unstructured) (FRSView, bool) {
@@ -136,6 +170,7 @@ func buildFRSView(item *unstructured.Unstructured) (FRSView, bool) {
 		}
 	}
 	v.State = state
+	v.Terminal = isTerminalState(state)
 
 	svc, _, _ := unstructured.NestedString(item.Object, "status", "transports", "sftp", "serviceName")
 	svcNS, _, _ := unstructured.NestedString(item.Object, "status", "transports", "sftp", "serviceNamespace")

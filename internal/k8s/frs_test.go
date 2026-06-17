@@ -130,6 +130,54 @@ func TestListActiveFRS_IncludesPendingAsNonConnectable(t *testing.T) {
 	}
 }
 
+func TestListAllFRS_IncludesTerminalAndExpired(t *testing.T) {
+	c := newTestClient(t)
+	ctx := context.Background()
+	gvr := schema.GroupVersionResource{Group: "datamover.kio.kasten.io", Version: "v1alpha1", Resource: "filerecoverysessions"}
+	for _, u := range []*unstructured.Unstructured{
+		makeFRS("active-1", "ns-a", true, false),                      // Running
+		makeFRS("terminated", "ns-a", false, false),                   // Terminated
+		makeFRS("expired", "ns-a", true, true),                        // Running but expired
+		makeFRSForCreate("ns-a", "failed-1", "Failed", "", "", 0, ""), // Failed, no transport
+	} {
+		if _, err := c.Dynamic().Resource(gvr).Namespace(u.GetNamespace()).Create(ctx, u, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// ListActiveFRS drops terminal + expired → only active-1 survives.
+	active, err := c.ListActiveFRS(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("ListActiveFRS = %d, want 1", len(active))
+	}
+	// ListAllFRS keeps everything.
+	all, err := c.ListAllFRS(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("ListAllFRS = %d, want 4", len(all))
+	}
+	byName := map[string]FRSView{}
+	for _, v := range all {
+		byName[v.Ref.Name] = v
+	}
+	if !byName["failed-1"].Terminal {
+		t.Error("failed-1 should be Terminal")
+	}
+	if byName["failed-1"].Connectable {
+		t.Error("failed-1 should not be Connectable")
+	}
+	if byName["terminated"].Terminal != true {
+		t.Error("terminated should be Terminal")
+	}
+	if byName["active-1"].Terminal {
+		t.Error("active-1 should not be Terminal")
+	}
+}
+
 func TestListActiveFRS_NamespaceWhitelist(t *testing.T) {
 	c := newTestClient(t)
 	ctx := context.Background()

@@ -26,6 +26,9 @@ type stubProvider struct {
 func (s *stubProvider) ListActiveFRS(_ context.Context, _ []string) ([]k8s.FRSView, error) {
 	return nil, nil
 }
+func (s *stubProvider) ListAllFRS(_ context.Context, _ []string) ([]k8s.FRSView, error) {
+	return nil, nil
+}
 func (s *stubProvider) GetFRS(_ context.Context, _ k8s.FRSRef) (k8s.FRSView, error) {
 	return k8s.FRSView{}, nil
 }
