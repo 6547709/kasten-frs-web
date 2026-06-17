@@ -1,0 +1,80 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kasten-frs-web-helper-allow-probes
+  namespace: kasten-io
+spec:
+  # Allow kubelet liveness/readiness/startup probes into the
+  # helper pod on its HTTP port. Probes originate from the
+  # kubelet on the node where the pod is scheduled — they're
+  # not in any namespace, so the `from` selector needs to be
+  # the empty namespaceSelector (any pod in any namespace) or
+  # an ipBlock covering the cluster's node CIDR. We use the
+  # namespace selector because it's the simpler expression and
+  # matches the helper's own NetworkPolicy in 50-*.yaml.
+  podSelector:
+    matchLabels:
+      app: kasten-frs-web-helper
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector: {}
+    - podSelector: {}
+    ports:
+    - { port: 8080, protocol: TCP }
+---
+# Explicit egress allow for the helper pod to the Kubernetes
+# API server. The bundle's 50-networkpolicy.yaml already has
+# an egress rule to "any namespace, port 443", which works in
+# standard OCP, but in hardened clusters with Compliance
+# Operator default-deny policies, that rule is sometimes
+# overridden or merged in surprising ways. This dedicated
+# policy is the belt-and-braces version: it allows egress to
+# the service-network range (where the `kubernetes` Service
+# ClusterIP lives) on port 443, AND to the kube-apiserver's
+# pod-network range on port 6443, AND to openshift-dns for
+# resolution. If your cluster uses a non-default service
+# network (e.g. 10.96.0.0/16 instead of 172.30.0.0/16), edit
+# the cidr below before applying.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kasten-frs-web-helper-allow-api-egress
+  namespace: kasten-io
+spec:
+  podSelector:
+    matchLabels:
+      app: kasten-frs-web-helper
+  policyTypes:
+  - Egress
+  egress:
+  # Kubernetes API server (in-cluster Service VIP range). The
+  # default OCP serviceNetwork is 172.30.0.0/16; adjust if
+  # your install uses a different CIDR.
+  - to:
+    - ipBlock:
+        cidr: 172.30.0.0/16
+    ports:
+    - { port: 443, protocol: TCP }
+  # kube-apiserver endpoints (the actual control-plane IPs
+  # behind the `kubernetes` Service). Default cluster network
+  # is 10.128.0.0/14 on OCP; adjust for your install.
+  - to:
+    - ipBlock:
+        cidr: 10.128.0.0/14
+    ports:
+    - { port: 6443, protocol: TCP }
+  # CoreDNS (openshift-dns namespace). UDP AND TCP because
+  # some resolvers fall back from UDP to TCP for large
+  # responses.
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: openshift-dns
+    ports:
+    - { port: 53, protocol: UDP }
+    - { port: 53, protocol: TCP }
+  # FRS SFTP transport.
+  - ports:
+    - { port: 2222, protocol: TCP }

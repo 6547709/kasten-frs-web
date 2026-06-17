@@ -21,6 +21,7 @@ import (
 	"github.com/liguoqiang/kasten-frs-web/internal/metrics"
 	"github.com/liguoqiang/kasten-frs-web/internal/server"
 	"github.com/liguoqiang/kasten-frs-web/internal/sftpclient"
+	"github.com/liguoqiang/kasten-frs-web/internal/startup"
 )
 
 // version is the build version surfaced in the UI footer. Three
@@ -56,6 +57,26 @@ func run() error {
 	}
 
 	// Load (or generate) the SSH keypair used for FRS SFTP auth.
+	// We run a preflight diagnostic just before this call: if the
+	// helper can't reach the API server at all (typically because
+	// a NetworkPolicy blocks egress from the helper namespace),
+	// the keymgr Get will fail with a generic "i/o timeout" and
+	// the operator has no signal as to which layer is broken.
+	// preflight.Run logs each layer (config, DNS, TCP, RBAC,
+	// discovery) with an actionable hint, so the next time this
+	// happens the operator reads the pod log top-down and
+	// immediately sees "egress NetworkPolicy" or "RBAC denied" or
+	// whatever the actual cause is. The preflight is best-effort:
+	// its own errors are logged and swallowed, so a misconfigured
+	// preflight can't take down the helper.
+	_ = startup.Run(context.Background(), startup.Options{
+		Logger:        logger,
+		Clientset:     kc.Core(),
+		Namespace:     cfg.PrivateKeySecretNamespace,
+		SecretName:    cfg.PrivateKeySecretName,
+		DialTimeout:   5 * time.Second,
+		OverallTimeout: 30 * time.Second,
+	})
 	km, err := keymgr.LoadOrGenerate(context.Background(), kc.Core(), cfg.PrivateKeySecretNamespace, cfg.PrivateKeySecretName)
 	if err != nil {
 		return fmt.Errorf("load/generate SSH key: %w", err)

@@ -45,14 +45,37 @@ spec:
           allowPrivilegeEscalation: false
           capabilities: { drop: ["ALL"] }
           readOnlyRootFilesystem: true
+        # Probes:
+        #   - startupProbe: gives the helper up to 5 minutes to come
+        #     up. Long enough to ride out a keymgr Get that hits a
+        #     30s TCP timeout (i.e. a NetworkPolicy that was supposed
+        #     to allow egress but doesn't). The previous config had
+        #     no startupProbe and a 10s livenessProbe, which meant a
+        #     single 30s i/o timeout during first boot would have
+        #     kubelet kill the pod before keymgr had a chance to
+        #     error out. With startupProbe, the liveness/readiness
+        #     timers don't even start counting until startupProbe
+        #     succeeds, so a slow first boot doesn't cascade into
+        #     CrashLoopBackOff.
+        #   - readinessProbe: 5s after startup succeeds, then every
+        #     10s. The Route + load balancer only route traffic to
+        #     pods that pass readiness, so this gates the user-
+        #     visible "is the helper up" check.
+        #   - livenessProbe: 30s after startup succeeds, then every
+        #     60s. Restart the pod only if /healthz genuinely stops
+        #     responding; the long period avoids restart-loops on
+        #     transient blips.
+        startupProbe:
+          httpGet: { path: /readyz, port: http }
+          failureThreshold: 30
+          periodSeconds: 10
         readinessProbe:
           httpGet: { path: /readyz, port: http }
-          initialDelaySeconds: 5
           periodSeconds: 10
         livenessProbe:
           httpGet: { path: /healthz, port: http }
-          initialDelaySeconds: 10
-          periodSeconds: 30
+          periodSeconds: 60
+          failureThreshold: 3
         resources:
           requests: { cpu: 100m, memory: 128Mi }
           limits:   { cpu: 500m, memory: 512Mi }
