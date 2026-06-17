@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.30 (2026-06-17)
+
+- ui: right-align the wizard "Create FRS" button (text-align on
+  .wizard-create) so it reads as the terminal step of the
+  left-to-right wizard flow (Step 0 → 1 → 2 → 3 → Create).
+- docs: DEPLOY.md rewritten with a Required / Strongly recommended /
+  Optional legend, a new "Where the SSH keypair lives" section
+  (Secret name, namespace, fields, backup/restore), an upgrade
+  section, and a troubleshooting table. New DEPLOY_cn.md is a
+  complete Chinese sibling; the two files must stay in sync.
+
 ## 0.3.28 (2026-06-17)
 
 UX + deployment hardening:
