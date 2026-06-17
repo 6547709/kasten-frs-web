@@ -3,6 +3,7 @@ coverage.out
 *.test
 .idea/
 .vscode/
+.workbuddy/
 web/static/htmx.min.js
 .kfrs-overlay-*/
 

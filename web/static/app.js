@@ -8,18 +8,95 @@
   const $ = (s, r) => (r || document).querySelector(s);
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 
-  // ---------- shared ----------
+  // ---------- shared: in-app confirm modal ----------
 
-  // Confirm-on-submit: any <form class="confirm-delete"> asks the
-  // user before sending. data-confirm is the message.
+  // A single reusable modal replaces the browser-native window.confirm
+  // for any <form class="confirm-delete">. The native dialog is ugly,
+  // unbranded, and visually jarring; this one matches the Kasten theme,
+  // animates in, traps focus, and is keyboard-accessible (Esc cancels,
+  // Enter confirms). Built lazily on first use and reused thereafter.
+  let modalEl = null;
+  let modalResolve = null;
+
+  function buildModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'kfrs-modal-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'kfrs-modal-title');
+    overlay.innerHTML =
+      '<div class="kfrs-modal">' +
+      '  <h2 id="kfrs-modal-title" class="kfrs-modal-title">Confirm</h2>' +
+      '  <p class="kfrs-modal-msg"></p>' +
+      '  <div class="kfrs-modal-actions">' +
+      '    <button type="button" class="kfrs-modal-cancel">Cancel</button>' +
+      '    <button type="button" class="kfrs-modal-ok danger">Delete</button>' +
+      '  </div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+
+    const cancel = overlay.querySelector('.kfrs-modal-cancel');
+    const ok = overlay.querySelector('.kfrs-modal-ok');
+    function close(result) {
+      overlay.classList.remove('open');
+      document.removeEventListener('keydown', onKey);
+      const r = modalResolve;
+      modalResolve = null;
+      // Wait for the fade-out transition before hiding from layout.
+      setTimeout(function () { overlay.style.display = 'none'; }, 160);
+      if (r) r(result);
+    }
+    function onKey(ev) {
+      if (ev.key === 'Escape') { ev.preventDefault(); close(false); }
+      else if (ev.key === 'Enter') { ev.preventDefault(); close(true); }
+    }
+    cancel.addEventListener('click', function () { close(false); });
+    ok.addEventListener('click', function () { close(true); });
+    overlay.addEventListener('click', function (ev) {
+      if (ev.target === overlay) close(false); // click backdrop = cancel
+    });
+    overlay._close = close;
+    overlay._onKey = onKey;
+    return overlay;
+  }
+
+  // confirmModal(message, opts) → Promise<boolean>. opts.okLabel and
+  // opts.title customise the dialog; defaults suit a destructive delete.
+  function confirmModal(message, opts) {
+    opts = opts || {};
+    if (!modalEl) modalEl = buildModal();
+    const titleEl = modalEl.querySelector('.kfrs-modal-title');
+    const msgEl = modalEl.querySelector('.kfrs-modal-msg');
+    const okEl = modalEl.querySelector('.kfrs-modal-ok');
+    titleEl.textContent = opts.title || 'Confirm deletion';
+    msgEl.textContent = message;
+    okEl.textContent = opts.okLabel || 'Delete';
+    modalEl.style.display = 'flex';
+    // Force reflow so the .open transition actually animates.
+    void modalEl.offsetWidth;
+    modalEl.classList.add('open');
+    document.addEventListener('keydown', modalEl._onKey);
+    // Focus the safe (cancel) action by default for destructive dialogs.
+    modalEl.querySelector('.kfrs-modal-cancel').focus();
+    return new Promise(function (resolve) { modalResolve = resolve; });
+  }
+  window.__kfrsConfirm = confirmModal;
+
+  // Confirm-on-submit: any <form class="confirm-delete"> routes through
+  // the in-app modal instead of window.confirm. We intercept submit,
+  // hold it, then re-submit programmatically once the user confirms.
   document.addEventListener('submit', function (e) {
     const form = e.target;
-    if (form && form.classList && form.classList.contains('confirm-delete')) {
-      const msg = form.getAttribute('data-confirm') || 'Confirm this action?';
-      if (!window.confirm(msg)) {
-        e.preventDefault();
-      }
-    }
+    if (!(form && form.classList && form.classList.contains('confirm-delete'))) return;
+    if (form._kfrsConfirmed) { form._kfrsConfirmed = false; return; } // allow the re-submit through
+    e.preventDefault();
+    const msg = form.getAttribute('data-confirm') || 'Are you sure you want to proceed?';
+    confirmModal(msg).then(function (ok) {
+      if (!ok) return;
+      form._kfrsConfirmed = true;
+      if (typeof form.requestSubmit === 'function') form.requestSubmit();
+      else form.submit();
+    });
   });
 
   // ---------- /sessions ----------
@@ -64,9 +141,21 @@
     const el = document.getElementById('elapsed');
     if (!el) return;
     const start = Date.now();
-    setInterval(function () {
+    let id = setInterval(function () {
       el.textContent = Math.floor((Date.now() - start) / 1000);
     }, 1000);
+    // Stop ticking when the element leaves the DOM (htmx swaps the
+    // preparing wrapper on terminal/ready states) or the page is
+    // hidden, so we don't leak a 1s timer for the life of the tab.
+    function stop() {
+      if (id) { clearInterval(id); id = null; }
+    }
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stop();
+    });
+    document.body.addEventListener('htmx:afterSwap', function () {
+      if (!document.body.contains(el)) stop();
+    });
   }
 
   // ---------- /wizard ----------
@@ -166,9 +255,20 @@
       const checked = cbs.filter(function (x) { return x.checked; });
       submit.disabled = checked.length === 0;
       if (pvcFields) {
-        pvcFields.innerHTML = checked.map(function (v) {
-          return '<input type="hidden" name="pvcNames" value="' + v.value + '">';
-        }).join('');
+        // Build the hidden pvcNames mirror with createElement instead
+        // of innerHTML string concatenation. PVC names come from the
+        // K8s API (and ultimately the FRS server) and could in theory
+        // contain markup; setting .value on a real element treats the
+        // string as data, never as HTML, so it can't break out of the
+        // attribute and inject script.
+        pvcFields.textContent = '';
+        checked.forEach(function (v) {
+          var inp = document.createElement('input');
+          inp.type = 'hidden';
+          inp.name = 'pvcNames';
+          inp.value = v.value;
+          pvcFields.appendChild(inp);
+        });
       }
     }
     window.__kfrsRefreshVolumes = enableSubmitIfVolumesPresent;

@@ -79,6 +79,39 @@ func TestLoginFlow(t *testing.T) {
 	}
 }
 
+func TestCSRF_EnforcedOnPost(t *testing.T) {
+	s := newTestServer(t)
+	// Log in to obtain a valid session cookie.
+	form := url.Values{"username": {"admin"}, "password": {"secret"}}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	s.Router().ServeHTTP(rr, req)
+	ck := rr.Header().Get("Set-Cookie")
+	cookieValue := strings.SplitN(strings.SplitN(ck, "=", 2)[1], ";", 2)[0]
+	cookie := &http.Cookie{Name: "kfrs_sid", Value: cookieValue}
+
+	// POST without a CSRF token → 403.
+	noTok := httptest.NewRequest(http.MethodPost, "/sessions/default/my-frs/delete", nil)
+	noTok.AddCookie(cookie)
+	rrNo := httptest.NewRecorder()
+	s.Router().ServeHTTP(rrNo, noTok)
+	if rrNo.Code != http.StatusForbidden {
+		t.Fatalf("POST without CSRF token: status = %d, want 403", rrNo.Code)
+	}
+
+	// POST with the correct CSRF token (header form) → not 403.
+	token := s.auth.Sessions.CSRFToken(cookieValue)
+	withTok := httptest.NewRequest(http.MethodPost, "/sessions/default/my-frs/delete", nil)
+	withTok.AddCookie(cookie)
+	withTok.Header.Set("X-CSRF-Token", token)
+	rrYes := httptest.NewRecorder()
+	s.Router().ServeHTTP(rrYes, withTok)
+	if rrYes.Code == http.StatusForbidden {
+		t.Fatalf("POST with valid CSRF token was rejected (403)")
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	s := newTestServer(t)
 	rr := httptest.NewRecorder()

@@ -26,6 +26,9 @@ type stubProvider struct {
 func (s *stubProvider) ListActiveFRS(_ context.Context, _ []string) ([]k8s.FRSView, error) {
 	return nil, nil
 }
+func (s *stubProvider) ListAllFRS(_ context.Context, _ []string) ([]k8s.FRSView, error) {
+	return nil, nil
+}
 func (s *stubProvider) GetFRS(_ context.Context, _ k8s.FRSRef) (k8s.FRSView, error) {
 	return k8s.FRSView{}, nil
 }
@@ -147,5 +150,26 @@ func TestWatchMap_ConcurrentSafe(t *testing.T) {
 	wm.del(ref)
 	if _, ok := wm.get(ref); ok {
 		t.Error("expected entry gone after del")
+	}
+}
+
+func TestWatchMap_Sweep(t *testing.T) {
+	wm := &watchMap{m: make(map[k8s.FRSRef]*watchState)}
+	now := time.Now()
+	old := k8s.FRSRef{Namespace: "ns", Name: "old"}
+	fresh := k8s.FRSRef{Namespace: "ns", Name: "fresh"}
+	// Stamp createdAt explicitly so the entry's age is deterministic.
+	wm.set(old, &watchState{State: "Ready", createdAt: now.Add(-2 * time.Hour)})
+	wm.set(fresh, &watchState{State: "Ready", createdAt: now.Add(-1 * time.Minute)})
+
+	evicted := wm.sweep(time.Hour, now)
+	if evicted != 1 {
+		t.Fatalf("evicted = %d, want 1", evicted)
+	}
+	if _, ok := wm.get(old); ok {
+		t.Error("stale entry should have been swept")
+	}
+	if _, ok := wm.get(fresh); !ok {
+		t.Error("fresh entry should survive the sweep")
 	}
 }

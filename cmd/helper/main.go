@@ -25,9 +25,9 @@ import (
 
 // version is the build version surfaced in the UI footer. Three
 // precedence levels:
-//   1. ldflags -X main.version=... (set at image build time by CI)
-//   2. VERSION env var (lets operators override at pod deploy time)
-//   3. "dev" (fallback for `go run` / local builds)
+//  1. ldflags -X main.version=... (set at image build time by CI)
+//  2. VERSION env var (lets operators override at pod deploy time)
+//  3. "dev" (fallback for `go run` / local builds)
 var version = func() string {
 	if v := os.Getenv("VERSION"); v != "" {
 		return v
@@ -98,6 +98,26 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger.Info("helper starting", "addr", l.Addr().String(), "version", version)
+	// Launch background maintenance (watch-map sweeper) tied to the
+	// server lifecycle so it shuts down cleanly on SIGTERM.
+	hs.StartBackground(ctx)
+
+	// Emit a startup config summary so operators can verify, from a
+	// single log line, that the pod came up with the settings they
+	// expect. Secrets (password, cookie secret) are intentionally
+	// never logged; only their derived behaviour (TTLs, ports) is.
+	logger.Info("helper starting",
+		"addr", l.Addr().String(),
+		"version", version,
+		"k8s_in_cluster", cfg.K8sInCluster,
+		"frs_port", cfg.FRSPort,
+		"frs_default_user", cfg.FRSDefaultUsername,
+		"sftp_connect_timeout", cfg.SFTPConnectTimeout.String(),
+		"sftp_pool_ttl", cfg.SFTPPoolTTL.String(),
+		"frs_wait_timeout", cfg.FRSWaitTimeout.String(),
+		"session_ttl", cfg.SessionTTL.String(),
+		"ns_whitelist", cfg.FRSNamespaceWhitelist,
+		"log_level", cfg.LogLevel,
+	)
 	return server.Run(ctx, srv, l)
 }

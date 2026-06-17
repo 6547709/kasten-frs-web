@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.3.28 (2026-06-17)
+
+UX + deployment hardening:
+
+- ui: replace browser-native `window.confirm` with an in-app, theme-
+  matched confirmation modal (animated, focus-managed, Esc=cancel /
+  Enter=confirm, backdrop-click cancels). Applies to all
+  `confirm-delete` forms (sessions + browse delete).
+- deploy: **fix image repo** — manifests pointed at the stale
+  `ghcr.io/liguoqiang/...:v0.1.0`; CI publishes to
+  `ghcr.io/6547709/kasten-frs-web`. Pinned to `v0.3.27` centrally via
+  kustomize `images:` and in the deployment fallback. (Was a guaranteed
+  ImagePullBackOff / stale-version deploy.)
+- deploy: **fix RBAC** — the Secret `create` grant was scoped by
+  `resourceNames`, which Kubernetes ignores for `create`, so the
+  helper's first-boot SSH-key Secret creation was unauthorized. Split
+  into an unscoped `create` rule + name-scoped `get/update/patch`.
+- docs: DEPLOY.md documents the image pin, the RBAC subtlety, and the
+  Failed-FRS cleanup flow.
+
+## 0.3.27 (2026-06-17)
+
+- sessions: list ALL FileRecoverySessions, including Failed / Succeeded
+  / Terminated and expired ones. Previously a timed-out FRS (which goes
+  Failed and has its frs-xxx pod torn down by K10) disappeared from the
+  UI, leaving operators unable to clean up the accumulating CR objects.
+  Non-Ready rows now render with only a Delete action; the expiry
+  countdown is suppressed for terminal/expired sessions.
+  - k8s: new `ListAllFRS`; `FRSView.Terminal` flag
+  - ui: state-aware action column + badge styling
+
+## 0.3.26 (2026-06-17)
+
+Security, observability, and UX hardening from the full code review
+(`docs/implementation_plan.md`):
+
+- security: eliminate XSS in the wizard volume picker (DOM API instead
+  of innerHTML)
+- security: enforce session expiry server-side via an HMAC-signed issue
+  timestamp (client can no longer extend a session by editing Max-Age)
+- security: stateless HMAC CSRF tokens on all authenticated POST forms
+- security: harden SFTP path validation to reject `..` segments while
+  allowing legitimate dotted names
+- security/download: RFC 5987-encoded Content-Disposition filenames
+- k8s: use `rest.HTTPClientFor` so the RestorePoint /details call works
+  with BearerTokenFile (K8s 1.21+) and rotated tokens
+- k8s: `Get` instead of `List`+scan in LookupFRSSource; server-side
+  `appType=virtualMachine` label selector for VM listings
+- ui: in-flight (Pending) FRS sessions are now listed with a disabled
+  Browse button instead of silently disappearing
+- observability: per-request `request_id` correlation (context logger +
+  `X-Request-Id` header), structured panic logging, startup config
+  summary, and real Prometheus metric wiring
+- ui: viewport meta, deferred scripts, responsive layout (<=768px),
+  human-friendly file sizes
+- reliability: watch-map background sweeper prevents unbounded growth
+
 ## 0.3.25 (2026-06-17)
 
 - Removed the last remaining Chinese strings on the FRS pages

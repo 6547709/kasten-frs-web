@@ -30,8 +30,14 @@ func (f *fakeFRS) ListActiveFRS(_ context.Context, _ []string) ([]k8s.FRSView, e
 		Ref:         k8s.FRSRef{Namespace: f.ns, Name: f.name},
 		ServiceName: f.ns, ServiceNS: f.ns, Port: int64(f.port),
 		HostKeySig: f.hostKey, State: "Running", ExpiryTime: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now(), Connectable: true,
 	}}, nil
+}
+
+// ListAllFRS mirrors ListActiveFRS for the fake; real implementations
+// additionally surface terminal/expired FRSes.
+func (f *fakeFRS) ListAllFRS(ctx context.Context, ns []string) ([]k8s.FRSView, error) {
+	return f.ListActiveFRS(ctx, ns)
 }
 
 func (f *fakeFRS) GetFRS(_ context.Context, ref k8s.FRSRef) (k8s.FRSView, error) {

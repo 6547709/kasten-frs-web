@@ -34,6 +34,7 @@
   </div>
 
   <form method="post" action="/wizard/create" class="wizard-create">
+    {{if .CSRF}}<input type="hidden" name="csrf_token" value="{{.CSRF}}">{{end}}
     <input type="hidden" name="vmNs"   id="vm-ns">
     <input type="hidden" name="vmName" id="vm-name">
     <input type="hidden" name="rpName" id="rp-name">

@@ -32,10 +32,22 @@ metadata:
   name: kasten-frs-web-helper-secret-read
   namespace: kasten-io
 rules:
+# get/update/patch are safely scoped to the single private-key Secret
+# by resourceNames.
 - apiGroups: [""]
   resources: ["secrets"]
   resourceNames: ["kasten-frs-helper-private-key"]
-  verbs: ["get", "create", "update", "patch"]
+  verbs: ["get", "update", "patch"]
+# `create` CANNOT be restricted by resourceNames: at admission time the
+# object name does not yet exist, so the Kubernetes authorizer ignores
+# resourceNames for create and the verb above would never authorize the
+# helper's first-boot Secret creation (keymgr.generateAndPersist →
+# secrets.Create). It must be granted unscoped on the secrets resource.
+# This is namespace-scoped (kasten-io only) Role, so the blast radius is
+# limited to creating Secrets within kasten-io.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

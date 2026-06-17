@@ -20,6 +20,11 @@ type watchState struct {
 	View  k8s.FRSView
 	Err   error
 	Done  bool
+	// createdAt is when this entry was last (re)set. The background
+	// sweeper uses it to evict stale entries so the map can't grow
+	// unbounded when users create FRSes via the wizard but never hit
+	// the cancel/delete paths that would otherwise remove them.
+	createdAt time.Time
 }
 
 // watchMap is a sync.Mutex-protected map of FRSRef → *watchState.
@@ -40,6 +45,9 @@ func (wm *watchMap) get(ref k8s.FRSRef) (*watchState, bool) {
 func (wm *watchMap) set(ref k8s.FRSRef, s *watchState) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
+	if s.createdAt.IsZero() {
+		s.createdAt = time.Now()
+	}
 	wm.m[ref] = s
 }
 
@@ -47,6 +55,49 @@ func (wm *watchMap) del(ref k8s.FRSRef) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 	delete(wm.m, ref)
+}
+
+// sweep removes entries older than maxAge. Returns the number of
+// entries evicted. Called periodically by the background sweeper so a
+// long-lived helper process doesn't accumulate watch entries forever.
+func (wm *watchMap) sweep(maxAge time.Duration, now time.Time) int {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	var evicted int
+	for ref, st := range wm.m {
+		if now.Sub(st.createdAt) > maxAge {
+			delete(wm.m, ref)
+			evicted++
+		}
+	}
+	return evicted
+}
+
+// startSweeper launches a goroutine that evicts watch-map entries
+// older than maxAge every interval. It exits when ctx is cancelled
+// (graceful shutdown). Both args are clamped to sane minimums so a
+// misconfiguration can't busy-loop.
+func (wm *watchMap) startSweeper(ctx context.Context, interval, maxAge time.Duration, log *slog.Logger) {
+	if interval < time.Minute {
+		interval = time.Minute
+	}
+	if maxAge < time.Minute {
+		maxAge = time.Hour
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if n := wm.sweep(maxAge, time.Now()); n > 0 && log != nil {
+					log.Debug("watchmap.sweep", "evicted", n, "max_age", maxAge.String())
+				}
+			}
+		}
+	}()
 }
 
 // handleWizardPage renders the wizard landing page: namespace picker
@@ -67,8 +118,9 @@ func (s *Server) handleWizardPage(w http.ResponseWriter, r *http.Request) {
 		"NSList":       nsList,
 		"User":         s.auth.Username,
 		"Version":      s.version,
+		"CSRF":         s.auth.CSRFToken(r),
 	}); err != nil {
-		slog.Error("render wizard", "err", err)
+		s.log(r.Context()).Error("render wizard", "err", err)
 	}
 }
 
@@ -178,7 +230,8 @@ func (s *Server) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, http.StatusInternalServerError, "No SSH public key", "helper did not load an SSH public key at startup")
 		return
 	}
-	slog.Info("wizard.create",
+	log := s.log(r.Context())
+	log.Info("wizard.create",
 		"user", s.auth.Username,
 		"vm_ns", vmNs, "vm_name", vmName,
 		"rp_name", rpName, "pvc_count", len(pvcNames),
@@ -189,13 +242,13 @@ func (s *Server) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
 		SSHUserPublicKey: s.pubKeyPEM,
 	})
 	if err != nil {
-		slog.Error("wizard.create.failed", "user", s.auth.Username, "vm_ns", vmNs, "vm_name", vmName, "err", err)
+		log.Error("wizard.create.failed", "user", s.auth.Username, "vm_ns", vmNs, "vm_name", vmName, "err", err)
 		s.renderError(w, http.StatusBadGateway, "Failed to create FRS", err.Error())
 		return
 	}
 	ref := view.Ref
 	s.watches.set(ref, &watchState{State: "Pending", View: *view})
-	slog.Info("frs.created", "user", s.auth.Username, "frs", ref.Namespace+"/"+ref.Name)
+	log.Info("frs.created", "user", s.auth.Username, "frs", ref.Namespace+"/"+ref.Name)
 	go s.watchFRSCreated(ref, *view)
 	http.Redirect(w, r, "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path=/", http.StatusSeeOther)
 }

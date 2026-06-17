@@ -2,9 +2,11 @@
 package server
 
 import (
-	"fmt"
+	"log/slog"
 	"net/http"
 	"runtime/debug"
+
+	"github.com/liguoqiang/kasten-frs-web/internal/logging"
 )
 
 // SecurityHeaders injects the standard response headers (CSP, HSTS, etc).
@@ -28,7 +30,16 @@ func Recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				fmt.Printf("PANIC %s %s: %v\n%s\n", r.Method, r.URL.Path, rec, debug.Stack())
+				// Use the request-scoped logger so the panic line
+				// carries the same request_id as the access log,
+				// and emit structured JSON consistent with the rest
+				// of the app instead of a bare fmt.Printf.
+				logging.FromContext(r.Context(), slog.Default()).Error("panic.recovered",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"panic", rec,
+					"stack", string(debug.Stack()),
+				)
 				http.Error(w, "internal error", http.StatusInternalServerError)
 			}
 		}()

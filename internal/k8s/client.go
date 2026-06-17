@@ -81,16 +81,20 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if hostBase == "" {
 		hostBase = "https://kubernetes.default.svc"
 	}
-	// http.DefaultClient does not honour cfg.TLSClientConfig, so
-	// the apiserver's custom CA bundle would be ignored and
-	// requests would fail with "x509: certificate signed by
-	// unknown authority". Clone DefaultTransport and inject the
-	// kube TLS config.
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	if tlsCfg, terr := rest.TLSConfigFor(cfg); terr == nil {
-		tr.TLSClientConfig = tlsCfg
+	// rest.HTTPClientFor returns an *http.Client whose RoundTripper
+	// is fully wired by client-go: it honours cfg.TLSClientConfig
+	// (custom apiserver CA), AND — crucially — injects the bearer
+	// token from EITHER cfg.BearerToken OR cfg.BearerTokenFile,
+	// re-reading the file on each request so rotated projected
+	// service-account tokens keep working. K8s 1.21+ uses
+	// BearerTokenFile by default, so the previous hand-rolled
+	// "Bearer "+cfg.BearerToken dance would send an empty token and
+	// get 401s. Letting client-go own the transport fixes that and
+	// removes the manual Authorization header entirely.
+	httpClient, herr := rest.HTTPClientFor(cfg)
+	if herr != nil {
+		return nil, fmt.Errorf("build k8s http client: %w", herr)
 	}
-	httpClient := &http.Client{Transport: tr}
 	return &Client{
 		core: core, dyn: dyn, cfg: cfg,
 		http:     httpClient,
@@ -114,19 +118,22 @@ func (c *Client) IsFake() bool { return c.isFake }
 // plumbing is heavier than the raw bytes we actually need.
 //
 // path must be the absolute path on the apiserver, e.g.
-//   /apis/apps.kio.kasten.io/v1alpha1/namespaces/default/restorepoints/foo/details
+//
+//	/apis/apps.kio.kasten.io/v1alpha1/namespaces/default/restorepoints/foo/details
 func (c *Client) doK8sRequest(ctx context.Context, method, path string) ([]byte, error) {
 	if c.isFake {
 		return nil, fmt.Errorf("doK8sRequest: not supported in fake mode")
 	}
-	if c.cfg == nil || c.cfg.BearerToken == "" {
-		return nil, fmt.Errorf("doK8sRequest: no in-cluster bearer token")
+	if c.http == nil {
+		return nil, fmt.Errorf("doK8sRequest: no k8s http client configured")
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.hostBase+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.cfg.BearerToken)
+	// No manual Authorization header: the http.Client built by
+	// rest.HTTPClientFor injects the bearer token (from BearerToken
+	// or BearerTokenFile) via its RoundTripper.
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {

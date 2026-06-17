@@ -30,17 +30,31 @@
         {{end}}
       </td>
       <td>
-        <span class="badge" data-expiry="{{.ExpiryTime.Format "2006-01-02T15:04:05Z07:00"}}">
-          <span class="exp-text">…</span>
-        </span>
+        {{if .Terminal}}
+          <span class="muted">—</span>
+        {{else if .ExpiryTime.IsZero}}
+          <span class="muted">—</span>
+        {{else}}
+          <span class="badge" data-expiry="{{.ExpiryTime.Format "2006-01-02T15:04:05Z07:00"}}">
+            <span class="exp-text">…</span>
+          </span>
+        {{end}}
       </td>
       <td class="action" style="text-align:right">
+        {{if and .Connectable (not .Terminal)}}
         <form method="post" action="/sessions/{{.Ref.Namespace}}/{{.Ref.Name}}/connect" style="display:inline">
+          {{if $.CSRF}}<input type="hidden" name="csrf_token" value="{{$.CSRF}}">{{end}}
           <button type="submit">Browse ›</button>
         </form>
+        {{else if .Terminal}}
+        <button type="button" disabled title="FRS is in a terminal state ({{.State}}); its recovery pod no longer exists — delete it to clean up">Unavailable</button>
+        {{else}}
+        <button type="button" disabled title="FRS is still preparing — its SFTP transport is not ready yet">Preparing…</button>
+        {{end}}
         <form method="post" action="/sessions/{{.Ref.Namespace}}/{{.Ref.Name}}/delete" style="display:inline"
-              class="confirm-delete" data-confirm="End and delete FRS {{.Ref.Namespace}}/{{.Ref.Name}}?">
-          <button type="submit" class="danger">End</button>
+              class="confirm-delete" data-confirm="Delete FRS {{.Ref.Namespace}}/{{.Ref.Name}}?">
+          {{if $.CSRF}}<input type="hidden" name="csrf_token" value="{{$.CSRF}}">{{end}}
+          <button type="submit" class="danger">Delete</button>
         </form>
       </td>
     </tr>
