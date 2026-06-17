@@ -110,7 +110,15 @@
       const d = Math.floor(s / 86400),
         h = Math.floor((s % 86400) / 3600),
         m = Math.floor((s % 3600) / 60);
-      if (d > 0) return d + 'd ' + (h < 10 ? '0' : '') + h + 'h left';
+      // Pad d to 2 digits too. Without it, "9d 03h left" ->
+      // "10d 03h left" causes a width jump at the 9d/10d
+      // boundary, and the badge shifts horizontally inside the
+      // table cell. The CSS min-width on .exp-text absorbs one
+      // such jump; the padStart here makes the format byte-for-
+      // byte width-stable from "00d 00h left" through
+      // "99d 23h left".
+      const dStr = String(d).padStart(2, '0');
+      if (d > 0) return dStr + 'd ' + (h < 10 ? '0' : '') + h + 'h left';
       return (h < 10 ? '0' : '') + h + 'h ' + (m < 10 ? '0' : '') + m + 'm left';
     }
     function tick() {
@@ -142,7 +150,14 @@
     if (!el) return;
     const start = Date.now();
     let id = setInterval(function () {
-      el.textContent = Math.floor((Date.now() - start) / 1000);
+      // Pad to 3 digits so the centered preparing page doesn't
+      // reflow as the digit count changes (0->9, 9->10, 10->99,
+      // ...). 3 digits is enough for the default 120s
+      // HELPER_FRS_WAIT_TIMEOUT; operators with longer timeouts
+      // (>999s) get a one-time reflow at the 999->1000 boundary,
+      // which is rare enough to not be worth more padding.
+      const secs = Math.floor((Date.now() - start) / 1000);
+      el.textContent = String(secs).padStart(3, '0');
     }, 1000);
     // Stop ticking when the element leaves the DOM (htmx swaps the
     // preparing wrapper on terminal/ready states) or the page is

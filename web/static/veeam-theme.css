@@ -593,6 +593,34 @@ button.danger:hover { background: #D03030; }
 .browse-preparing { padding: 40px; text-align: center; }
 .browse-preparing h1 { font-size: 18px; color: #4A5560; margin-bottom: 16px; }
 .browse-preparing .err { color: #B02020; margin: 16px 0; }
+/* Pin the preparing-page elapsed counter to a fixed width so the
+   centered layout above it doesn't reflow every second as the
+   digit count changes (0→9, 9→10, 10→99 ...). The bug:
+   '0' / '1' / '8' all have different glyph widths in the default
+   proportional font, so the <p> line they sit in gets wider every
+   tick, and the .browse-preparing text-align:center recentres the
+   whole block. Combined with the min-width below and the JS-side
+   padStart(3,'0') in app.js, the counter line is byte-for-byte
+   width-stable from t=0 to t=999. */
+.browse-preparing #elapsed {
+  font-variant-numeric: tabular-nums;
+  display: inline-block;
+  min-width: 2.4em;
+  text-align: right;
+}
+/* Same trick for the sessions-page countdown badge. The format
+   is "2d 03h left" / "23h 04m left" / "expired" — h and m are
+   already zero-padded, but 'd' isn't, so "9d 03h left" ->
+   "10d 03h left" causes the same kind of shift on the hours
+   boundary. min-width is generous enough for "999d 23h left" so
+   the box doesn't grow even if an operator leaves a session
+   running for a year. */
+.badge[data-expiry] .exp-text {
+  font-variant-numeric: tabular-nums;
+  display: inline-block;
+  min-width: 9ch;
+  text-align: right;
+}
 .empty { color: #8A95A2; font-style: italic; padding: 12px; }
 
 /* ---------- Responsive ---------- */
