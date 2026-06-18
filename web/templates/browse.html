@@ -80,8 +80,19 @@
   </form>
   <!-- Polls /browse?partial=ready every 3s. While the FRS isn't Ready
        yet, the handler returns 204 No Content + HX-Redirect on Ready
-       (full reload) or the preparing block on terminal state. -->
+       (full reload) or the preparing block on terminal state.
+
+       swap=outerHTML + target=closest .browse-preparing is the key
+       bit. renderPreparingBody emits a <div class="browse-preparing">
+       wrapper, so the response is structurally the same as the
+       target. With innerHTML-swap, htmx would INSERT the new
+       wrapper INSIDE the existing one — nesting it — and the extra
+       40px padding pushes the h1 / state line / counter visibly
+       downward. Worse, every 200 response (Failed/Timeout polls)
+       deepens the nesting, so the content keeps creeping down.
+       outerHTML-swap replaces the target with the response (same
+       shape, no nesting), keeping the layout dimensionally stable. -->
   <div hx-get="/browse?frs={{.FRS.Namespace}}/{{.FRS.Name}}&path=/&partial=ready"
-       hx-trigger="every 3s" hx-swap="innerHTML" hx-target="closest .browse-preparing"></div>
+       hx-trigger="every 3s" hx-swap="outerHTML" hx-target="closest .browse-preparing"></div>
 </div>
 {{end}}

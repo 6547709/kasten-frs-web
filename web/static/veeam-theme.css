@@ -590,12 +590,12 @@ button.danger:hover { background: #D03030; }
 .wizard-create button[disabled] { opacity: 0.5; cursor: not-allowed; }
 .vol-item { display: block; padding: 4px 0; }
 .browse-actions { margin-bottom: 12px; text-align: right; }
-.browse-preparing { padding: 40px; text-align: center; }
+.browse-preparing { padding: 40px; text-align: center; min-height: 320px; }
 .browse-preparing h1 { font-size: 18px; color: #4A5560; margin-bottom: 16px; }
 .browse-preparing .err { color: #B02020; margin: 16px 0; }
 /* Pin the preparing-page elapsed counter to a fixed width so the
    centered layout above it doesn't reflow every second as the
-   digit count changes (0→9, 9→10, 10→99 ...). The bug:
+   digit count changes (0->9, 9->10, 10->99 ...). The bug:
    '0' / '1' / '8' all have different glyph widths in the default
    proportional font, so the <p> line they sit in gets wider every
    tick, and the .browse-preparing text-align:center recentres the
@@ -604,6 +604,7 @@ button.danger:hover { background: #D03030; }
    width-stable from t=0 to t=999. */
 .browse-preparing #elapsed {
   font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
   display: inline-block;
   min-width: 2.4em;
   text-align: right;

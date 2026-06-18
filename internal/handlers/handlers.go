@@ -227,8 +227,22 @@ func (s *Server) routes() {
 	// (default since Chrome 100+) would refuse to apply it, leaving
 	// the page unstyled. http.FileServer sets .css to text/css and
 	// .js to application/javascript by extension mapping.
-	s.mux.Handle("/static/", http.StripPrefix("/static/",
-		http.FileServer(http.FS(web.Static()))))
+	//
+	// We wrap the FileServer in a no-cache shim. The browser cache
+	// is the silent killer of CSS/JS deploys: a user who tested a
+	// broken page yesterday keeps seeing the broken page today,
+	// even after the image rolled. The shim forces a re-fetch on
+	// every load so what you see in the UI is always the version
+	// baked into the running image. Cost: a few KB of CSS/JS
+	// re-downloaded per page load. Benefit: no "I tested and the
+	// fix isn't there" false negatives during operator triage.
+	staticFS := http.StripPrefix("/static/", http.FileServer(http.FS(web.Static())))
+	s.mux.Handle("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		staticFS.ServeHTTP(w, r)
+	}))
 
 	authed := http.NewServeMux()
 	authed.HandleFunc("GET /sessions", s.handleSessions)
