@@ -249,7 +249,6 @@ func (s *Server) routes() {
 	authed.HandleFunc("POST /sessions/{ns}/{name}/connect", s.handleConnect)
 	authed.HandleFunc("POST /sessions/{ns}/{name}/delete", s.handleSessionDelete)
 	authed.HandleFunc("GET /browse", s.handleBrowse)
-	authed.HandleFunc("POST /browse/extend", s.handleBrowseExtend)
 	authed.HandleFunc("GET /download", s.handleDownload)
 	authed.HandleFunc("GET /download-zip", s.handleDownloadZip)
 
@@ -555,52 +554,6 @@ func errString(e error) string {
 		return ""
 	}
 	return e.Error()
-}
-
-// handleBrowseExtend is the "Wait longer" button on the preparing
-// page. Per spec §9 + §15, when WaitForReady times out the user
-// must be able to extend the wait instead of giving up. The
-// optional "sec" form field selects the new wait window (default
-// 60s); the form passes it so the button label matches the actual
-// wait time. We update the watch map to a fresh Pending state
-// with the current FRS view, then start a new watchFRSCreated
-// goroutine that polls WaitForReady with the requested timeout.
-// The browser is 303-redirected back to /browse where it will see
-// the new Pending state.
-func (s *Server) handleBrowseExtend(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		s.renderError(w, http.StatusBadRequest, "Bad form data", err.Error())
-		return
-	}
-	frs := r.FormValue("frs")
-	parts := strings.SplitN(frs, "/", 2)
-	if len(parts) != 2 {
-		s.renderError(w, http.StatusBadRequest, "Bad frs parameter", frs)
-		return
-	}
-	ref := k8s.FRSRef{Namespace: parts[0], Name: parts[1]}
-	// Parse the requested extend window. Falls back to the server's
-	// configured frsTimeout, then 60s. The form's "sec" param lets
-	// the button advertise exactly how long the user is asking to
-	// wait ("Wait 60s more" → sec=60).
-	extend := s.frsTimeout
-	if extend == 0 {
-		extend = 60 * time.Second
-	}
-	if secStr := r.FormValue("sec"); secStr != "" {
-		if sec, err := strconv.Atoi(secStr); err == nil && sec > 0 && sec <= 600 {
-			extend = time.Duration(sec) * time.Second
-		}
-	}
-	// Fetch the current FRS view to seed the watch map with a sensible initial.
-	v, err := s.frsGet(r.Context(), ref)
-	if err != nil {
-		s.renderError(w, http.StatusBadGateway, "Failed to query FRS", err.Error())
-		return
-	}
-	s.watches.set(ref, &watchState{State: "Pending", View: v})
-	go s.watchFRSCreatedWithTimeout(ref, v, extend)
-	http.Redirect(w, r, "/browse?frs="+ref.Namespace+"/"+ref.Name+"&path=/", http.StatusSeeOther)
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {

@@ -9,7 +9,7 @@ commonLabels:
 # private registry mirror — here at deploy time.
 images:
 - name: ghcr.io/6547709/kasten-frs-web
-  newTag: v0.3.36
+  newTag: v0.3.37
 resources:
 - 05-serviceaccount.yaml
 - 06-rbac.yaml

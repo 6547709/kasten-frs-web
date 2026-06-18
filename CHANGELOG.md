@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.37 (2026-06-18)
+
+- ui: drop the "Wait 60s more" button on the preparing page
+  and replace it with a "Back to sessions" link. The button
+  called /browse/extend → frsGet, which 404'd once K10 had
+  cleaned up the (now-Terminal) FRS — surfacing as
+  "Failed to query FRS" the moment the user tried to extend
+  the wait. The extending-the-wait behaviour was also
+  misleading: it unconditionally overwrote the existing
+  watch-map entry with Pending, silently restarting a wait
+  that K10 had already given up on. Removing the button
+  makes the preparing page a clear two-action surface:
+  "Cancel and delete FRS" (destructive) or "Back to
+  sessions" (read-only exit). The /browse/extend route
+  and handleBrowseExtend are removed; the bundle no
+  longer ships the dead code.
+
 ## 0.3.30 (2026-06-17)
 
 - ui: right-align the wizard "Create FRS" button (text-align on

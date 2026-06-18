@@ -72,12 +72,7 @@
     <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
     <button type="submit" class="danger">Cancel and delete FRS</button>
   </form>
-  <form method="post" action="/browse/extend" style="display:inline">
-    {{if .CSRF}}<input type="hidden" name="csrf_token" value="{{.CSRF}}">{{end}}
-    <input type="hidden" name="frs" value="{{.FRS.Namespace}}/{{.FRS.Name}}">
-    <input type="hidden" name="sec" value="60">
-    <button type="submit">Wait 60s more</button>
-  </form>
+  <p class="back-link-wrap"><a href="/sessions" class="back-link">‹ Back to sessions</a></p>
   <!-- Polls /browse?partial=ready every 3s. While the FRS isn't Ready
        yet, the handler returns 204 No Content + HX-Redirect on Ready
        (full reload) or the preparing block on terminal state.

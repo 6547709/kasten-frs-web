@@ -593,6 +593,17 @@ button.danger:hover { background: #D03030; }
 .browse-preparing { padding: 40px; text-align: center; min-height: 320px; }
 .browse-preparing h1 { font-size: 18px; color: #4A5560; margin-bottom: 16px; }
 .browse-preparing .err { color: #B02020; margin: 16px 0; }
+/* "Back to sessions" link shown on the preparing page. Sits
+   below the destructive Cancel button so the user has a
+   non-destructive exit — the previous design's "Wait 60s more"
+   was misleading (it called frsGet which 404'd once K10 had
+   cleaned up the FRS, surfacing "Failed to query FRS"). */
+.browse-preparing .back-link-wrap { margin-top: 16px; }
+.browse-preparing .back-link {
+  color: var(--k10-link);
+  text-decoration: none;
+}
+.browse-preparing .back-link:hover { text-decoration: underline; }
 /* Pin the preparing-page elapsed counter to a fixed width so the
    centered layout above it doesn't reflow every second as the
    digit count changes (0->9, 9->10, 10->99 ...). The bug:

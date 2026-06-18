@@ -472,7 +472,7 @@ RBAC。确认用的是应用内对话框(不再用浏览器的 `window.confirm`
 | **helper pod `CrashLoopBackOff` 报 `fatal: load/generate SSH key: get secret ...: dial tcp 172.30.0.1:443: i/o timeout`** | **pod 连不上 Kubernetes API server。** 这是 **egress** 问题(NetworkPolicy 拦了 helper 命名空间的出向、命名空间在不可路由的子网、或者集群的 private control plane 那个子网路由不到)。`LoadOrGenerate` 的第一步 `secrets.Get` 就超时了,根本走不到创建那一步。 | **先修 egress 路径** — 放行 helper 命名空间到 API server 的出向(OCP 默认就放开了,除非你额外加了 NetworkPolicy 拦掉)。如果环境上确实修不了 egress,看 §3.1 "可选:手工预创建密钥对" — 但**注意**,预创建 Secret 解决不了这个具体的报错,因为 helper 启动时第一次动作就是同一个 `secrets.Get`,照样会超时。**真正的修法是 egress**,其它都只是表面文章。 |
 | 点 Create FRS 之后浏览器卡在 `i/o timeout` | §4 NetworkPolicy 没生效 | 重新 `oc apply -k deploy/` 或直接应用 §4 的 YAML。 |
 | 每个向导 FRS 一上来就是 `Failed` | §5.2 SCC 没授 | 应用 §5.2 的方式 A 或 B。 |
-| 找不到 `Wait longer` 按钮 | 准备页面在超时前就渲染了,这是正常的 | 等到超时后,按钮就会出现。 |
+| 找不到 `Wait longer` 按钮 | v0.3.37 已经把这个按钮删了 — 详见 v0.3.37 changelog。用"返回会话列表"或者"取消并删除 FRS"代替。 | n/a |
 | 登录页 footer 显示 `dev` | `VERSION` build-arg 没传进去 | 重新构建镜像,加 `--build-arg VERSION=vX.Y.Z`;详见 §10。 |
 | helper 第一次用得好好的,突然新建的 FRS 鉴权失败 | 有老 FRS 还引用着**旧**的 SSH 密钥(运维轮换了密钥对,或者有人删了 Secret 让 helper 自动生成了新密钥) | 要么把旧密钥对写回 Secret(记得先备份 — 见 §3),要么把老 FRS 全删了再用向导重建。 |
 
