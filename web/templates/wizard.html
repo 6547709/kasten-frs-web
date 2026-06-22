@@ -67,7 +67,14 @@
 {{$vm := .VM}}
 {{range .RPs}}
 <li class="rp-item" data-rp-name="{{.Name}}" data-rp-ns="{{.Namespace}}">
-  <div class="rp-name"><strong>{{.Name}}</strong></div>
+  <div class="rp-name">
+    <strong>{{.Name}}</strong>
+    {{if eq .Type "export"}}
+    <span class="badge rp-type rp-type-export" title="Volume is exported to a configured object/file storage — FRS supported.">✓ Export</span>
+    {{else}}
+    <span class="badge rp-type rp-type-snapshot" title="Snapshot-only RestorePoint — K10 FileRecoverySession will fail on this RP. Pick an 'Export' RP instead.">⚠ Snapshot</span>
+    {{end}}
+  </div>
   <div class="rp-meta">
     <span class="badge {{.State | lower}}">{{.State}}</span>
     <span class="time">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</span>

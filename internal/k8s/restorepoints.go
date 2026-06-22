@@ -34,6 +34,37 @@ type RestorePoint struct {
 	Namespace string
 	State     string
 	CreatedAt time.Time
+	// Type reports whether the RP is an export (data is in object
+	// storage or an NFS/SMB share) or just a snapshot. K10's
+	// FileRecoverySession ONLY accepts exported RPs (K10 docs:
+	// "The files are present in a volume that was either
+	// Exported in Filesystem Mode, or Exported in Block Mode").
+	// Snapshot-only RPs fail FRS creation with
+	// "snapshot not found in RestorePoint X or not an exported
+	// RestorePoint" — the misleading "or" suggests snapshots are
+	// supported, but they aren't. The wizard uses this field to
+	// badge each RP so the user picks an export RP up front
+	// instead of waiting for FRS creation to fail.
+	//
+	// Values:
+	//   "export"   — RP has the k10.kasten.io/exportProfile label
+	//                (data is exported to the named object/file
+	//                storage profile).
+	//   "snapshot" — RP has no exportProfile label; pure local
+	//                snapshot. FRS will fail on this RP.
+	Type string
+}
+
+// rpTypeFromLabels classifies an RP by its K10 labels. The K10
+// controller stamps k10.kasten.io/exportProfile (and usually
+// k10.kasten.io/exportType) on every RP whose data has been
+// pushed to a configured export target. Anything without that
+// label is a local-snapshot RP that K10's FRS will reject.
+func rpTypeFromLabels(labels map[string]string) string {
+	if labels["k10.kasten.io/exportProfile"] != "" {
+		return "export"
+	}
+	return "snapshot"
 }
 
 // VolumeArtifact is a PVC exposed via the RestorePoint /details subresource.
@@ -152,7 +183,9 @@ func (c *Client) ListRestorePoints(ctx context.Context, ns, appName string) ([]R
 		state, _, _ := unstructured.NestedString(it.Object, "status", "state")
 		out = append(out, RestorePoint{
 			Name: it.GetName(), Namespace: it.GetNamespace(),
-			State: state, CreatedAt: it.GetCreationTimestamp().Time,
+			State:   state,
+			CreatedAt: it.GetCreationTimestamp().Time,
+			Type:   rpTypeFromLabels(it.GetLabels()),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

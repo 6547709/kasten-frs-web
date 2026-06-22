@@ -565,6 +565,21 @@ button.danger:hover { background: #D03030; }
   background: #E1F0FF; border-color: #6FA8DC;
 }
 .vm-meta, .rp-meta { font-size: 11px; color: #6B7480; }
+/* RP type badge — '✓ Export' (green) means the RP has been
+   pushed to a configured object/file storage profile and K10
+   FileRecoverySession will work on it. '⚠ Snapshot'
+   (amber) means the RP is a local snapshot only — K10 FRS
+   will reject it with 'snapshot not found... or not an
+   exported RestorePoint'. Both sit next to the RP name in
+   the wizard picker so the user can tell at a glance which
+   RPs to pick. */
+.rp-type { margin-left: 8px; font-weight: 500; }
+.rp-type-export {
+  background: #E0F2E9; color: #1E8E3E; border: 1px solid #B7DBC3;
+}
+.rp-type-snapshot {
+  background: #FFF4E0; color: #9A5B0A; border: 1px solid #FBD38D;
+}
 .vm-count {
   font-size: 11px; color: #6B7480; text-align: right;
   padding: 4px 2px 0; border-top: 1px solid #E5E8EB; margin-top: 4px;

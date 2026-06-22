@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.38 (2026-06-22)
+
+- ui(wizard): show ✓ Export / ⚠ Snapshot badge on every
+  RestorePoint in the wizard's RP picker. K10's
+  FileRecoverySession only accepts RPs whose data has been
+  pushed to a configured export target (object store or
+  NFS/SMB file share). The "snapshot not found... or not
+  an exported RestorePoint" error from the datamover is
+  misleading — the "or" suggests snapshots are also
+  accepted, but per the K10 docs they aren't. So picking a
+  pure-snapshot RP and clicking Create FRS just burns
+  ~30s of wizard->K10 round trip for a guaranteed
+  failure. The new badge lets the user pick an export RP
+  on the first try.
+- k8s: k8s.RestorePoint gets a Type field ("export" /
+  "snapshot") populated from the K10 labels — presence
+  of k10.kasten.io/exportProfile ⇒ "export", else
+  "snapshot".
+
 ## 0.3.37 (2026-06-18)
 
 - ui: drop the "Wait 60s more" button on the preparing page
