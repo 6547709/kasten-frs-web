@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.40 (2026-06-26)
+
+- sftp: ListDir now follows symlinks so Windows directory
+  junctions (Documents and Settings, All Users, Default
+  User, etc.) are correctly reported as directories instead
+  of files. The K10 datamover's SFTP server exposes NTFS
+  junctions as symlinks, and pkg/sftp's Lstat returns
+  os.ModeSymlink rather than os.ModeDir for those entries,
+  so a naive IsDir() check showed them as files. We now
+  follow each symlink via Stat; if the target is a
+  directory, we wrap the FileInfo so IsDir() reports true
+  and the Mode() bit matches. The rest of the stack
+  (download, tar walker, path validation) sees a normal
+  directory entry. Cost: one SFTP round trip per junction;
+  unaffected dirs/files pay nothing.
+
 ## 0.3.39 (2026-06-26)
 
 - handlers(wizard): the "Missing parameters" 400 from

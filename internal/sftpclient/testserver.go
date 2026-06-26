@@ -52,6 +52,25 @@ func StartSFTPTestServer(t *testing.T) (*TestServer, func()) {
 	if err := os.WriteFile(filepath.Join(root, "hello.txt"), []byte("hi"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Create a real subdirectory + a symlink pointing at it, so
+	// tests that exercise symlink-to-directory handling have
+	// something to look at. The link name has a space in it on
+	// purpose — Windows FRS exposes junctions like "Documents
+	// and Settings" with spaces; we want to make sure the
+	// follow-stat path doesn't choke on them.
+	target := filepath.Join(root, "real-dir")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "inside.txt"), []byte("yes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "link to dir")); err != nil {
+		// Some platforms refuse symlinks in t.TempDir() (Windows
+		// without admin, some sandboxes). Skip the test on
+		// those — the fix being tested is Linux-only.
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
 
 	// Host key
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)

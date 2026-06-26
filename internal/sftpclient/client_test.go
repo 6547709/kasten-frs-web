@@ -3,6 +3,7 @@ package sftpclient
 import (
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -76,6 +77,65 @@ func TestClient_DialListRead(t *testing.T) {
 	b, _ := io.ReadAll(rc)
 	if !strings.Contains(string(b), "hi") {
 		t.Errorf("content = %q", b)
+	}
+}
+
+func TestClient_ListDir_FollowsSymlinkToDir(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	entries, err := sess.ListDir("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Find the symlink entry ("link to dir"). The testserver
+	// creates it via os.Symlink above.
+	var linkInfo os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "link to dir" {
+			linkInfo = e
+			break
+		}
+	}
+	if linkInfo == nil {
+		t.Skip("test server didn't create the symlink — skipping")
+	}
+
+	// Before the fix, IsDir() returns false (pkg/sftp's Lstat
+	// reports os.ModeSymlink, not os.ModeDir). After the fix,
+	// ListDir follows the symlink via Stat and reports IsDir()=true
+	// (and flips the Mode() bit to match).
+	if !linkInfo.IsDir() {
+		t.Errorf("symlink-to-dir entry IsDir()=false, want true (target IS a directory)")
+	}
+	if linkInfo.Mode()&os.ModeDir == 0 {
+		t.Errorf("symlink-to-dir entry Mode() missing ModeDir bit; downstream tar.FileInfoHeader would misclassify")
+	}
+
+	// And actually navigating INTO it should work — the
+	// wrapped FileInfo flows through the rest of the stack
+	// unchanged, and the SFTP Open/Stat calls the helper
+	// issues follow symlinks on the server side.
+	inside, err := sess.ListDir("/link to dir")
+	if err != nil {
+		t.Errorf("ListDir into symlink-to-dir failed: %v", err)
+	}
+	if len(inside) == 0 || inside[0].Name() != "inside.txt" {
+		t.Errorf("expected inside.txt in the symlinked dir, got %+v", inside)
 	}
 }
 

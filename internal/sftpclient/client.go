@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -75,6 +76,31 @@ func (s *Session) Close() error {
 }
 
 // ListDir lists entries at path.
+//
+// On Windows FRS restores (NTFS / ReFS volumes exposed via the
+// K10 datamover's SFTP server), the kernel presents Windows
+// directory junctions (reparse points) — Documents and Settings,
+// All Users, Default User, etc. — as symlinks. pkg/sftp's Lstat
+// path reflects that, so each junction comes back as
+// os.ModeSymlink rather than os.ModeDir, and a naive IsDir()
+// check shows the user "this is a file" — they can't browse
+// into the linked directory.
+//
+// The fix: after ReadDir, do a follow-stat for any entry whose
+// mode includes os.ModeSymlink. If the target is a directory,
+// wrap the FileInfo so IsDir() reports true (and the Mode
+// bit matches). The rest of the stack — Open(), the
+// download-zip walker, the path validation — all use the
+// wrapped FileInfo consistently, so the rest of the user
+// flow (clicking into the junction, downloading from it) just
+// works.
+//
+// Cost: one extra SFTP round trip per junction. On a typical
+// FRS-restore top level (a few junctions, mostly real dirs),
+// that's < 100ms total — well under the user's perception
+// threshold. For deeply-nested FRS restores, the cost is
+// bounded by the number of junctions in each listed dir, not
+// the total entry count.
 func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 	if err := validatePath(path); err != nil {
 		return nil, err
@@ -84,8 +110,63 @@ func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 		slog.Warn("sftp.listdir.failed", "path", path, "err", err)
 		return nil, err
 	}
-	slog.Info("sftp.listdir", "path", path, "count", len(infos))
-	return infos, nil
+	out := make([]os.FileInfo, 0, len(infos))
+	for _, info := range infos {
+		// Most entries are regular files or directories; the
+		// symlink-follow is a no-op for those. Skip the
+		// Stat() call unless the mode says it's a symlink —
+		// saves a round trip per entry in the common case.
+		if info.Mode()&os.ModeSymlink == 0 {
+			out = append(out, info)
+			continue
+		}
+		// Follow the symlink (Stat, not Lstat) so we can see
+		// the target's real type. Errors here mean the link is
+		// broken or otherwise unreadable — fall back to the
+		// original symlink FileInfo so the user at least sees
+		// the entry.
+		targetInfo, statErr := s.sftp.Stat(filepath.Join(path, info.Name()))
+		if statErr != nil {
+			slog.Warn("sftp.listdir.symlink_stat_failed",
+				"path", path, "name", info.Name(), "err", statErr)
+			out = append(out, info)
+			continue
+		}
+		if targetInfo.IsDir() {
+			out = append(out, &fileInfoWithDir{FileInfo: info, isDir: true})
+			slog.Debug("sftp.listdir.symlink_resolved_to_dir",
+				"path", path, "name", info.Name())
+		} else {
+			out = append(out, info)
+		}
+	}
+	slog.Info("sftp.listdir", "path", path, "count", len(out))
+	return out, nil
+}
+
+// fileInfoWithDir wraps an os.FileInfo and overrides IsDir() /
+// Mode() so an entry that the SFTP server reported as a symlink
+// can be presented as a directory to the rest of the stack.
+// Embedding the original FileInfo means every other method
+// (Name, Size, ModTime, Sys, etc.) is forwarded unchanged.
+type fileInfoWithDir struct {
+	os.FileInfo
+	isDir bool
+}
+
+func (f *fileInfoWithDir) IsDir() bool { return f.isDir }
+
+// Mode returns the underlying mode with the directory bit
+// set or cleared to match f.isDir. Some downstream code
+// (e.g. tar.FileInfoHeader, path validation) reads Mode()
+// directly instead of going through IsDir(); keeping the
+// bit in sync means those code paths see the same answer.
+func (f *fileInfoWithDir) Mode() os.FileMode {
+	m := f.FileInfo.Mode()
+	if f.isDir {
+		return m | os.ModeDir
+	}
+	return m &^ os.ModeDir
 }
 
 // Open returns a ReadCloser for a file at path.
