@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -205,6 +206,24 @@ func (s *Server) handleWizardVolumes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// formKeys returns the list of form field names present in r.
+// Used in the wizard-create 400 log so we can tell whether the
+// browser ever sent a vmNs/rpName/pvcNames key at all (vs.
+// sent them but empty). A request with zero keys almost always
+// means the form was posted via dev tools / curl rather than
+// the wizard UI.
+func formKeys(r *http.Request) []string {
+	if err := r.ParseForm(); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(r.Form))
+	for k := range r.Form {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // handleWizardCreate is the wizard's POST endpoint. It validates
 // the form, creates the FRS, records a Pending entry in the watch
 // map, kicks off the ready-watcher goroutine, and redirects the
@@ -222,8 +241,44 @@ func (s *Server) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
 	vmName := r.FormValue("vmName")
 	rpName := r.FormValue("rpName")
 	pvcNames := r.Form["pvcNames"]
-	if vmNs == "" || vmName == "" || rpName == "" || len(pvcNames) == 0 {
-		s.renderError(w, http.StatusBadRequest, "Missing parameters", "vmNs, vmName, rpName, pvcNames are required")
+	// Identify the specific missing field(s) so the operator
+	// looking at the rendered error page (and the pod log) can
+	// tell which step of the wizard didn't populate. The previous
+	// generic "vmNs, vmName, rpName, pvcNames are required"
+	// message left you guessing whether the user skipped the VM
+	// row, the RP row, or the volume checkboxes.
+	var missing []string
+	if vmNs == "" {
+		missing = append(missing, "vmNs (the chosen VM's namespace — not set means no VM row was clicked)")
+	}
+	if vmName == "" {
+		missing = append(missing, "vmName (the chosen VM's name — not set means no VM row was clicked)")
+	}
+	if rpName == "" {
+		missing = append(missing, "rpName (the chosen RestorePoint — not set means no RP row was clicked, or the vol-list for the previous VM was cleared on a re-click and the user never re-picked an RP)")
+	}
+	if len(pvcNames) == 0 {
+		missing = append(missing, "pvcNames (at least one volume checkbox must be selected — not set means the vol-list was empty, or the user never checked a box, or pvcFields innerHTML was cleared between check and submit)")
+	}
+	if len(missing) > 0 {
+		// Log the full form so post-mortem doesn't have to guess
+		// whether the user submitted via the wizard UI, a curl
+		// replay, or dev tools.
+		slog.Warn("wizard.create.missing_params",
+			"user", s.auth.Username,
+			"vm_ns", vmNs, "vm_name", vmName,
+			"rp_name", rpName, "pvc_count", len(pvcNames),
+			"raw_form_keys", formKeys(r),
+			"missing", missing,
+		)
+		s.renderError(w, http.StatusBadRequest,
+			"Missing wizard parameters",
+			"The following required fields were empty when Create FRS was submitted:\n\n  - "+strings.Join(missing, "\n  - ")+"\n\n"+
+				"This almost always means a JS error prevented the wizard from filling the hidden inputs, "+
+				"or the form was submitted via dev tools / curl (bypassing the button's disabled state). "+
+				"Open the browser dev console and check the wizard's app.js handlers; "+
+				"the pod log has the full form keys dumped under wizard.create.missing_params.",
+		)
 		return
 	}
 	if s.pubKeyPEM == "" {

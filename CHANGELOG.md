@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.39 (2026-06-26)
+
+- handlers(wizard): the "Missing parameters" 400 from
+  /wizard/create now lists the SPECIFIC empty fields and
+  what they mean in plain English ("rpName (the chosen
+  RestorePoint — not set means no RP row was clicked)"),
+  plus an end-of-message hint pointing at the browser
+  dev console. The previous "vmNs, vmName, rpName,
+  pvcNames are required" left you guessing which step
+  of the wizard didn't populate.
+- handlers(wizard): on the same 400, log a structured
+  wizard.create.missing_params event with the full
+  received form (vmNs/vmName/rpName/pvcCount + the
+  raw list of form keys) so post-mortem doesn't have
+  to guess whether the request came from the wizard
+  UI, dev tools, or curl.
+
 ## 0.3.38 (2026-06-22)
 
 - ui(wizard): show ✓ Export / ⚠ Snapshot badge on every
