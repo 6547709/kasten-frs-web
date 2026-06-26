@@ -35,16 +35,14 @@
     </tr>
     {{end}}
     {{range .Entries}}
-    {{$clickPath := joinPath $.Path .Name}}
-    {{if .ResolvedPath}}{{$clickPath = .ResolvedPath}}{{end}}
     <tr>
       <td class="name">
         {{if .IsDir}}
-        <a href="?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{$clickPath}}">
+        <a href="?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{.ClickPath}}">
           <span class="ico folder">📁</span>{{.Name}}
         </a>
         {{else}}
-        <a href="/download?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{$clickPath}}">
+        <a href="/download?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{.ClickPath}}">
           <span class="ico file">📄</span>{{.Name}}
         </a>
         {{end}}
@@ -53,10 +51,10 @@
       <td class="modtime">{{.ModTime.Format "2006-01-02 15:04:05"}}</td>
       <td class="actions">
         {{if .IsDir}}
-          <a href="?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{$clickPath}}">Open</a>
-          <a href="/download-zip?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{$clickPath}}">Download as ZIP</a>
+          <a href="?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{.ClickPath}}">Open</a>
+          <a href="/download-zip?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{.ClickPath}}">Download as ZIP</a>
         {{else}}
-          <a href="/download?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{$clickPath}}">Download</a>
+          <a href="/download?frs={{$.FRS.Namespace}}/{{$.FRS.Name}}&path={{.ClickPath}}">Download</a>
         {{end}}
       </td>
     </tr>

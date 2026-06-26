@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,93 @@ func TestHealthz(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
 	}
+}
+
+// TestNewBrowseEntry locks the viewmodel contract. The point of
+// newBrowseEntry is to give the html/template a struct whose
+// fields it can always find via reflection, even when the
+// underlying os.FileInfo is pkg/sftp's concrete *fs.fileInfo
+// (which doesn't expose ResolvedPath() as a method template
+// can see). If this test changes, re-read the template's
+// range over .Entries to make sure all fields it touches are
+// still populated.
+func TestNewBrowseEntry(t *testing.T) {
+	t.Run("regular dir uses parent/name as ClickPath", func(t *testing.T) {
+		dir, err := os.Stat("/tmp")
+		if err != nil {
+			t.Skip("needs /tmp")
+		}
+		v := newBrowseEntry(dir, "/parent")
+		if v.Name != "tmp" {
+			t.Errorf("Name = %q, want tmp", v.Name)
+		}
+		if !v.IsDir {
+			t.Error("IsDir should be true for /tmp")
+		}
+		if v.ClickPath != "/parent/tmp" {
+			t.Errorf("ClickPath = %q, want /parent/tmp", v.ClickPath)
+		}
+		if v.IsSymlink {
+			t.Error("IsSymlink should be false for /tmp")
+		}
+	})
+
+	t.Run("symlink with ResolvedPath uses resolved path", func(t *testing.T) {
+		fi := &fileInfoWithDirStub{
+			name:     "Documents and Settings",
+			resolved: "/parent/Users",
+			mode:     os.ModeSymlink | os.ModeDir,
+		}
+		v := newBrowseEntry(fi, "/parent")
+		if v.Name != "Documents and Settings" {
+			t.Errorf("Name = %q", v.Name)
+		}
+		if !v.IsDir {
+			t.Error("IsDir should be true (wrapper returned true)")
+		}
+		if v.ClickPath != "/parent/Users" {
+			t.Errorf("ClickPath = %q, want /parent/Users (resolved, not literal)", v.ClickPath)
+		}
+		if !v.IsSymlink {
+			t.Error("IsSymlink should be true (Mode has ModeSymlink)")
+		}
+	})
+
+	t.Run("plain file uses parent/name", func(t *testing.T) {
+		fi := &fileInfoWithDirStub{name: "readme.txt", mode: 0}
+		v := newBrowseEntry(fi, "/parent")
+		if v.IsDir {
+			t.Error("IsDir should be false")
+		}
+		if v.ClickPath != "/parent/readme.txt" {
+			t.Errorf("ClickPath = %q, want /parent/readme.txt", v.ClickPath)
+		}
+	})
+}
+
+// fileInfoWithDirStub implements os.FileInfo + a ResolvedPath()
+// method so we can exercise newBrowseEntry's wrapper-aware branch
+// without standing up the full SFTP stack.
+type fileInfoWithDirStub struct {
+	name     string
+	resolved string
+	mode     os.FileMode // explicit mode so tests can choose symlink-vs-file
+}
+
+func (f *fileInfoWithDirStub) Name() string       { return f.name }
+func (f *fileInfoWithDirStub) Size() int64        { return 0 }
+func (f *fileInfoWithDirStub) Mode() os.FileMode  { return f.mode }
+func (f *fileInfoWithDirStub) ModTime() time.Time { return time.Time{} }
+func (f *fileInfoWithDirStub) IsDir() bool        { return f.Mode()&os.ModeDir != 0 }
+func (f *fileInfoWithDirStub) Sys() any           { return nil }
+func (f *fileInfoWithDirStub) ResolvedPath() string {
+	if f.resolved == "" {
+		// For the "plain file uses parent/name" case we DON'T
+		// want the wrapper to claim a resolved path; the wrapper
+		// is supposed to be opt-in via ResolvedPath().
+		return ""
+	}
+	return f.resolved
 }
 
 // silence unused

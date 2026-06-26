@@ -429,13 +429,25 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build a template-friendly viewmodel slice. Go's html/template
+	// looks up fields/methods on the CONCRETE type (e.g. pkg/sftp's
+	// *fs.fileInfo), not the os.FileInfo interface, so it can't see
+	// the fileInfoWithDir wrapper's methods like ResolvedPath().
+	// Pre-resolving everything to a struct means the template can
+	// always find the field, and we keep the wrapper-side logic
+	// (IsDir flip, ResolvedPath attachment) intact.
+	viewEntries := make([]browseEntry, 0, len(entries))
+	for _, e := range entries {
+		viewEntries = append(viewEntries, newBrowseEntry(e, path))
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplates.ExecuteTemplate(w, "layout", map[string]any{
 		"Title":        "Browse " + ref.Namespace + "/" + ref.Name,
 		"BodyTemplate": "browse_body",
 		"FRS":          ref,
 		"Path":         path,
-		"Entries":      entries,
+		"Entries":      viewEntries,
 		"User":         s.auth.Username,
 		"Version":      s.version,
 		"CSRF":         s.auth.CSRFToken(r),
@@ -783,6 +795,46 @@ func resolvedPathOf(fi os.FileInfo) string {
 		return r.ResolvedPath()
 	}
 	return ""
+}
+
+// browseEntry is the template-facing viewmodel for one row in
+// the browse file-list. Go's html/template looks up fields on
+// the CONCRETE type — most ListDir entries are pkg/sftp's
+// *fs.fileInfo, which doesn't expose our wrapper methods
+// (ResolvedPath) or any field other than what os.FileInfo
+// already has. Pre-computing everything into a plain struct
+// means the template can always find every value it needs,
+// even when the underlying entry is a symlink we had to
+// resolve to a different target path.
+type browseEntry struct {
+	Name         string
+	IsDir        bool
+	Size         int64
+	ModTime      time.Time
+	ClickPath    string // path to use as the link target / download arg
+	IsSymlink    bool   // for the row's icon if we ever want to show it
+	OriginalName string // name as returned by SFTP (pre-resolution)
+}
+
+// newBrowseEntry builds the template viewmodel for one entry.
+// parent is the directory we're listing; ClickPath is the
+// resolved path if the entry is a symlink/junction we resolved,
+// otherwise the literal child path.
+func newBrowseEntry(fi os.FileInfo, parent string) browseEntry {
+	name := fi.Name()
+	click := joinPath(parent, name)
+	if rp := resolvedPathOf(fi); rp != "" {
+		click = rp
+	}
+	return browseEntry{
+		Name:         name,
+		IsDir:        fi.IsDir(),
+		Size:         fi.Size(),
+		ModTime:      fi.ModTime(),
+		ClickPath:    click,
+		IsSymlink:    fi.Mode()&os.ModeSymlink != 0,
+		OriginalName: name,
+	}
 }
 
 func parseFRSQuery(r *http.Request) (k8s.FRSRef, string, error) {

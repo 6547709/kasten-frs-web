@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.44 (2026-06-26)
+
+- handlers: fix the regression where /browse rendered an
+  empty `<tbody>` (visible as "no contents" in the browser).
+  Cause: v0.3.42's browse template referenced `.ResolvedPath`
+  on each entry — but Go's html/template looks up fields/
+  methods on the CONCRETE type (e.g. pkg/sftp's *fs.fileInfo),
+  not the os.FileInfo interface. The wrapper's ResolvedPath()
+  method exists on fileInfoWithDir but not on the concrete
+  *fs.fileInfo that most entries actually are, so the
+  template panicked at execution time. The handler logged
+  "render browse: ...can't evaluate field ResolvedPath in
+  type fs.FileInfo" but the response went out with the
+  partial HTML that had been streamed before the panic.
+  Fix: introduce a template-friendly viewmodel struct
+  (`browseEntry`) with the fields the template uses, and
+  populate it in the handler before ExecuteTemplate. The
+  template now reads `.ClickPath` (a pre-computed string)
+  instead of calling .ResolvedPath. The wrapper still
+  attaches ResolvedPath to resolved entries; the handler
+  reads it via resolvedPathOf() and writes the result into
+  the viewmodel. No behaviour change for non-symlink
+  entries.
+- handlers: test for newBrowseEntry locks the viewmodel
+  contract — regular dir gets ClickPath=parent/name,
+  resolved symlink gets ClickPath=resolved.
+
 ## 0.3.43 (2026-06-26)
 
 - sftp: probe 2 (ReadLink) now handles ABSOLUTE symlink targets
