@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.3.42 (2026-06-26)
+
+- sftp: junction resolution gains a two-tier fallback after
+  v0.3.41's OPENDIR probe also failed on the live cluster
+  (`sftp.listdir.symlink_probe_failed` for Documents and
+  Settings / All Users / Default User). K10's datamover SFTP
+  server returns "file does not exist" for SSH_FXP_STAT,
+  SSH_FXP_OPENDIR, AND SSH_FXP_OPEN on NTFS junctions — its
+  mount layer doesn't translate reparse points at the SFTP
+  level. New probes added after OPENDIR fails:
+    1. `SSH_FXP_READLINK` on the link path. Readlink is a
+       metadata read — the server can serve it without
+       resolving at the mount layer (it's just bytes from
+       the reparse-point metadata block). We then resolve
+       the target ourselves (relative target → absolute
+       against the parent dir) and probe the resolved
+       path with OPENDIR.
+    2. Hardcoded Windows junction map. Covers the four
+       NTFS junctions that show up on every Windows FRS
+       restore (Documents and Settings → Users, All Users
+       → ProgramData, Default User → Default, plus the
+       nested "Documents and Settings/All Users" form).
+       Used as a last-resort fallback when even Readlink
+       can't be served.
+  When probe 2 or 3 succeeds, we record the RESOLVED path
+  on the wrapped FileInfo (`ResolvedPath()`), and the
+  browse template + download-zip walker navigate to the
+  target instead of the (broken) link.
+- ui: browse template uses `entry.ResolvedPath()` (when
+  non-empty) as the click target. The link name still
+  displays ("Documents and Settings"), but clicking
+  goes to /Users — the actual navigable directory.
+- handlers(zip): download-zip walker follows `ResolvedPath()`
+  on each junction entry, so a zip of a volume root contains
+  the contents of /Users, /ProgramData, /Default rather
+  than three unreadable 0-byte files. Archive entry NAMES
+  keep the original junction name (the user sees
+  "Documents and Settings/" in the tar, not "Users/").
+- sftp: testserver fs now implements `ReadlinkFileLister`
+  so test ReadLink calls return real symlink targets
+  (production-shape behaviour). `WithBrokenOpenDir` lets
+  a test simulate "datamover doesn't follow NTFS junctions
+  at OPENDIR" so probe 2 and 3 can be exercised in isolation.
+
 ## 0.3.41 (2026-06-26)
 
 - sftp: switch the junction probe from `Stat` to `OPENDIR`

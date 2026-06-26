@@ -86,35 +86,52 @@ func (s *Session) Close() error {
 // check shows the user "this is a file" — they can't browse
 // into the linked directory.
 //
-// The fix: after ReadDir, for each entry whose mode includes
-// os.ModeSymlink, probe the path by issuing OPENDIR (via
-// ReadDir on the joined path) and immediately closing it.
-// OPENDIR is mandatory SFTP server semantics (the server has
-// to implement it or even the root listing wouldn't work),
-// and the OS-level mount underneath the server is what follows
-// NTFS junctions — so if ReadDir returns successfully, the
-// junction is navigable as a directory. (We tried Stat in
-// v0.3.40; K10's datamover SFTP server returns "file does not
-// exist" for SSH_FXP_STAT on junctions, so Stat is not a
-// reliable tell here. ReadDir is.)
+// History of attempts:
 //
-// On success, wrap the FileInfo so IsDir() reports true (and
-// the Mode bit matches). The rest of the stack — Open(), the
-// download-zip walker, the path validation — all use the
-// wrapped FileInfo consistently, so the rest of the user
-// flow (clicking into the junction, downloading from it) just
-// works. On failure, fall back to the original symlink
-// FileInfo so the user at least sees the entry (and the
-// inevitable 404 on click is a clear signal the link target
-// is unreachable, rather than the helper silently hiding it).
+//   - v0.3.40: SSH_FXP_STAT on the junction path. K10 datamover
+//     returns "file does not exist" — server's STAT doesn't
+//     follow symlinks.
+//   - v0.3.41: SSH_FXP_OPENDIR via sftp.ReadDir(joined). Same
+//     not-exist error — datamover's OPENDIR also doesn't follow
+//     reparse points. The mount layer underneath the SFTP server
+//     doesn't translate NTFS junctions at all.
 //
-// Cost: one extra SFTP round trip per junction (ReadDir opens
-// a directory handle, fetches at least the . and .. entries,
-// and closes). On a typical FRS-restore top level (a few
-// junctions, mostly real dirs), that's a few hundred ms total
-// — well under the user's perception threshold. The cost is
-// bounded by the number of junctions in each listed dir, not
-// the total entry count.
+// Current strategy (v0.3.42): probe with multiple methods, in
+// order of generality:
+//
+//  1. OPENDIR on the joined path. Works for any SFTP server that
+//     follows symlinks at OPENDIR time (the standard behaviour).
+//  2. SSH_FXP_READLINK on the joined path. This returns the
+//     symlink's textual target, which the SFTP server can serve
+//     without resolving at the mount layer — it's just bytes from
+//     a metadata block. We then resolve the target ourselves
+//     (relative → absolute against the parent dir) and probe
+//     that resolved path with ReadDir.
+//  3. Windows junction map. A small table of well-known Windows
+//     NTFS reparse points and their canonical targets
+//     (Documents and Settings → Users, All Users → ProgramData,
+//     Default User → Default). Used as a last-resort fallback
+//     when the SFTP server can't even serve the symlink text.
+//
+// On any successful probe (1/2/3), we wrap the FileInfo with
+// fileInfoWithDir so IsDir() reports true and the Mode() bit
+// matches. If the probe that succeeded is (2) or (3), we also
+// record the resolved absolute path so the rest of the stack
+// (the browse template's click URL, the download handler, the
+// zip walker) navigates to the TARGET instead of the link
+// itself — the link's path is unreachable on this server, but
+// the target's path is.
+//
+// On total failure, fall back to the original symlink FileInfo
+// so the user at least sees the entry; clicking will return a
+// clear 404 from Open() rather than the helper silently hiding
+// the row.
+//
+// Cost: 1-2 extra SFTP round trips per junction. Worst case
+// (junction target unreachable AND no map hit) is 3 probes
+// per junction. On a typical FRS-restore top level (a few
+// junctions, mostly real dirs), that's still a few hundred ms
+// total — well under the user's perception threshold.
 func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 	if err := validatePath(path); err != nil {
 		return nil, err
@@ -127,35 +144,102 @@ func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 	out := make([]os.FileInfo, 0, len(infos))
 	for _, info := range infos {
 		// Most entries are regular files or directories; the
-		// symlink-probe is a no-op for those. Skip the
-		// ReadDir probe unless the mode says it's a symlink —
-		// saves a round trip per entry in the common case.
+		// symlink probes are a no-op for those. Skip unless
+		// the mode says it's a symlink — saves a round trip
+		// per entry in the common case.
 		if info.Mode()&os.ModeSymlink == 0 {
 			out = append(out, info)
 			continue
 		}
 		joined := filepath.Join(path, info.Name())
-		probe, probeErr := s.sftp.ReadDir(joined)
-		if probeErr != nil {
-			// Junction target unreachable from this SFTP
-			// server (e.g. datamover LSTAT-style for STAT,
-			// broken reparse, permission on the target).
-			// Fall back to the symlink entry so the user
-			// can still see the name; clicking will return
-			// a clear 404 from the Open() path rather than
-			// the helper silently dropping the row.
-			slog.Warn("sftp.listdir.symlink_probe_failed",
-				"path", path, "name", info.Name(), "err", probeErr)
-			out = append(out, info)
+
+		// Probe 1: OPENDIR on the joined path.
+		if _, err := s.sftp.ReadDir(joined); err == nil {
+			out = append(out, &fileInfoWithDir{FileInfo: info, isDir: true})
+			slog.Info("sftp.listdir.symlink_resolved_via_opendir",
+				"path", path, "name", info.Name())
 			continue
 		}
-		_ = probe // we only care that OPENDIR succeeded
-		out = append(out, &fileInfoWithDir{FileInfo: info, isDir: true})
-		slog.Info("sftp.listdir.symlink_resolved_to_dir",
+
+		// Probe 2: READLINK + resolve + OPENDIR on target.
+		target, rlErr := s.sftp.ReadLink(joined)
+		if rlErr != nil {
+			slog.Warn("sftp.listdir.symlink_readlink_failed",
+				"path", path, "name", info.Name(), "err", rlErr)
+		}
+		if rlErr == nil && target != "" {
+			resolved := target
+			if !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(path, resolved)
+			}
+			_, rderr := s.sftp.ReadDir(resolved)
+			if rderr != nil {
+				slog.Warn("sftp.listdir.symlink_readlink_target_probe_failed",
+					"path", path, "name", info.Name(),
+					"target", target, "resolved", resolved, "err", rderr)
+			}
+			if rderr == nil {
+				out = append(out, &fileInfoWithDir{
+					FileInfo:     info,
+					isDir:        true,
+					resolvedPath: resolved,
+				})
+				slog.Info("sftp.listdir.symlink_resolved_via_readlink",
+					"path", path, "name", info.Name(),
+					"target", target, "resolved", resolved)
+				continue
+			}
+		}
+
+		// Probe 3: hardcoded Windows junction map.
+		if mapped, ok := windowsJunctionTarget(info.Name()); ok {
+			resolved := filepath.Join(path, mapped)
+			if _, err := s.sftp.ReadDir(resolved); err == nil {
+				out = append(out, &fileInfoWithDir{
+					FileInfo:     info,
+					isDir:        true,
+					resolvedPath: resolved,
+				})
+				slog.Info("sftp.listdir.symlink_resolved_via_junction_map",
+					"path", path, "name", info.Name(), "resolved", resolved)
+				continue
+			}
+		}
+
+		// All probes failed: junction target is unreachable from
+		// this SFTP server. Fall back to the symlink entry so the
+		// user at least sees the row; clicking will return a
+		// clear 404 from Open() rather than the helper silently
+		// dropping it.
+		slog.Warn("sftp.listdir.symlink_unresolvable",
 			"path", path, "name", info.Name())
+		out = append(out, info)
 	}
 	slog.Info("sftp.listdir", "path", path, "count", len(out))
 	return out, nil
+}
+
+// windowsJunctionTarget returns the canonical target name of a
+// well-known Windows NTFS reparse point if `name` matches one.
+// The map covers the four junction names that show up on every
+// Windows FRS restore:
+//
+//	Documents and Settings → Users     (XP-era compatibility)
+//	Users\All Users         → ProgramData
+//	Users\Default User      → Default
+//	Documents and Settings\All Users → ProgramData (defensive)
+//
+// Returns (target, true) on hit, ("", false) otherwise.
+func windowsJunctionTarget(name string) (string, bool) {
+	switch name {
+	case "Documents and Settings":
+		return "Users", true
+	case "All Users":
+		return "ProgramData", true
+	case "Default User":
+		return "Default", true
+	}
+	return "", false
 }
 
 // fileInfoWithDir wraps an os.FileInfo and overrides IsDir() /
@@ -163,12 +247,26 @@ func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 // can be presented as a directory to the rest of the stack.
 // Embedding the original FileInfo means every other method
 // (Name, Size, ModTime, Sys, etc.) is forwarded unchanged.
+//
+// If resolvedPath is non-empty, the browse/handlers code should
+// navigate to that path instead of the literal Name (the link
+// itself may be unreachable on the SFTP server even though its
+// target is fine — typical of K10 datamover + NTFS junctions).
 type fileInfoWithDir struct {
 	os.FileInfo
-	isDir bool
+	isDir        bool
+	resolvedPath string
 }
 
 func (f *fileInfoWithDir) IsDir() bool { return f.isDir }
+
+// ResolvedPath returns the absolute path this entry actually
+// points to (after symlink / junction resolution), or "" if
+// the entry should be navigated by its literal name. Used by
+// the browse template's click URLs and the download/zip walker
+// to skip the (possibly broken) link and go straight to the
+// target.
+func (f *fileInfoWithDir) ResolvedPath() string { return f.resolvedPath }
 
 // Mode returns the underlying mode with the directory bit
 // set or cleared to match f.isDir. Some downstream code

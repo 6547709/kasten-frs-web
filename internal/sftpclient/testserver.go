@@ -18,10 +18,23 @@ import (
 
 // TestServer is an in-process SFTP server bound to a temp dir.
 type TestServer struct {
-	listener net.Listener
-	signer   ssh.Signer
-	hostKey  ssh.PublicKey
-	rootDir  string
+	listener      net.Listener
+	signer        ssh.Signer
+	hostKey       ssh.PublicKey
+	rootDir       string
+	brokenOpenDir map[string]bool
+}
+
+// WithBrokenOpenDir configures the server so OPENDIR (READDIR)
+// on the given paths returns an error. Used by tests to simulate
+// K10 datamover's "doesn't follow NTFS junctions at OPENDIR"
+// behaviour, so the symlink_resolved_via_opendir probe misses
+// and the ReadLink / junction-map fallback paths can be tested.
+func (ts *TestServer) WithBrokenOpenDir(paths ...string) {
+	ts.brokenOpenDir = make(map[string]bool, len(paths))
+	for _, p := range paths {
+		ts.brokenOpenDir[p] = true
+	}
 }
 
 // Addr returns the listener address.
@@ -65,7 +78,15 @@ func StartSFTPTestServer(t *testing.T) (*TestServer, func()) {
 	if err := os.WriteFile(filepath.Join(target, "inside.txt"), []byte("yes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(root, "link to dir")); err != nil {
+	// Create the symlink with a RELATIVE target ("real-dir"),
+	// not absolute. Production SFTP servers report symlink
+	// targets as relative paths within their root — K10
+	// datamover does the same for NTFS junctions (target
+	// strings are like "Users", "ProgramData", "Default",
+	// relative to the volume root). Absolute targets would
+	// exercise a different code path in the helper that
+	// production traffic doesn't hit.
+	if err := os.Symlink("real-dir", filepath.Join(root, "link to dir")); err != nil {
 		// Some platforms refuse symlinks in t.TempDir() (Windows
 		// without admin, some sandboxes). Skip the test on
 		// those — the fix being tested is Linux-only.
@@ -130,8 +151,15 @@ func StartSFTPTestServer(t *testing.T) (*TestServer, func()) {
 // fs is an SFTP filesystem rooted at ts.rootDir.
 // All paths are joined to the root; absolute paths (like "/hello.txt")
 // resolve to "<root>/hello.txt".
+//
+// brokenOpenDir is an optional set of paths where OPENDIR should
+// return an error. Tests use this to simulate K10 datamover's
+// behaviour of NOT following NTFS junctions at OPENDIR time
+// (so the symlink_resolved_via_opendir probe misses and we fall
+// through to ReadLink or the junction map).
 type fs struct {
-	root string
+	root           string
+	brokenOpenDir  map[string]bool
 }
 
 func (f *fs) real(p string) string {
@@ -147,6 +175,9 @@ func (f *fs) real(p string) string {
 func (f *fs) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 	switch r.Method {
 	case "List":
+		if f.brokenOpenDir[r.Filepath] {
+			return nil, fmt.Errorf("file does not exist")
+		}
 		infos, err := os.ReadDir(f.real(r.Filepath))
 		if err != nil {
 			return nil, err
@@ -184,6 +215,14 @@ func (f *fs) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 
 func (f *fs) Filecmd(r *sftp.Request) error {
 	return nil
+}
+
+// Readlink makes fs implement ReadlinkFileLister so the server
+// returns the symlink's textual target on SSH_FXP_READLINK
+// instead of falling back to filestat (which returns the link
+// itself, useless for our resolution probe).
+func (f *fs) Readlink(path string) (string, error) {
+	return os.Readlink(f.real(path))
 }
 
 // dirLister is a stateful ListerAt. After the first ListAt call returns
@@ -244,10 +283,11 @@ func (ts *TestServer) handle(nconn net.Conn, cfg *ssh.ServerConfig) {
 					if string(req.Payload[4:]) == "sftp" {
 						_ = req.Reply(true, nil)
 						server := sftp.NewRequestServer(ch, sftp.Handlers{
-							FileGet:  &fs{root: ts.rootDir},
-							FilePut:  &fs{root: ts.rootDir},
-							FileCmd:  &fs{root: ts.rootDir},
-							FileList: &fs{root: ts.rootDir},
+							FileGet: &fs{root: ts.rootDir},
+							FilePut: &fs{root: ts.rootDir},
+							FileCmd: &fs{root: ts.rootDir},
+							FileList: &fs{root: ts.rootDir,
+								brokenOpenDir: ts.brokenOpenDir},
 						})
 						if err := server.Serve(); err != nil && err != io.EOF {
 							_ = ch.Close()

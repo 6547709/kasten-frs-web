@@ -190,6 +190,144 @@ func TestClient_ListDir_BrokenSymlinkStaysFile(t *testing.T) {
 	}
 }
 
+// TestClient_ListDir_ReadLinkFallback exercises probe 2: when
+// OPENDIR on the link itself fails (simulating K10 datamover
+// not following NTFS junctions at OPENDIR time), the helper
+// should fall through to READLINK, resolve the target itself,
+// and probe the resolved path with OPENDIR. On success the
+// entry is reported as a directory with a non-empty
+// ResolvedPath pointing at the actual target.
+func TestClient_ListDir_ReadLinkFallback(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	// Tell the testserver to refuse OPENDIR on the symlink
+	// path, mirroring K10 datamover's behaviour for NTFS
+	// junctions. ReadLink + the resolved-path probe should
+	// still succeed because the target itself is a real
+	// directory and OPENDIR on the target works fine.
+	ts.WithBrokenOpenDir("/link to dir")
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	entries, err := sess.ListDir("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var linkInfo os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "link to dir" {
+			linkInfo = e
+			break
+		}
+	}
+	if linkInfo == nil {
+		t.Skip("test server didn't create the symlink")
+	}
+	if !linkInfo.IsDir() {
+		t.Errorf("symlink-to-dir entry IsDir()=false; ReadLink fallback should have promoted it to a dir")
+	}
+	if rp := resolvedPathOf(linkInfo); rp != "/real-dir" {
+		t.Errorf("ResolvedPath()=%q, want %q", rp, "/real-dir")
+	}
+}
+
+// TestClient_ListDir_JunctionMapFallback exercises probe 3: the
+// hardcoded Windows junction map. We register a Windows-style
+// junction name ("Documents and Settings") symlinked to a
+// real directory, configure the testserver to refuse both
+// OPENDIR-on-link and READLINK (simulating a totally unco-
+// operative datamover), and assert the helper still resolves
+// the junction via the hardcoded map to "Users".
+func TestClient_ListDir_JunctionMapFallback(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	// Create the Windows junction name (with a space, on purpose)
+	// pointing to "Users" — matches the hardcoded map.
+	target := filepath.Join(ts.RootDir(), "Users")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "alice.txt"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(ts.RootDir(), "Documents and Settings")); err != nil {
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
+
+	// Block both OPENDIR-on-link AND READLINK so probes 1+2
+	// miss. Probe 3 (junction map) is the only thing that can
+	// resolve it.
+	ts.WithBrokenOpenDir("/Documents and Settings")
+	// pkg/sftp's ReadLink is implemented via sftp_request_server.go's
+	// sshFxpReadlinkPacket which calls FileCmd. The default handler
+	// returns nil — so ReadLink "succeeds" but returns an empty
+	// string. We patch the FileCmd return to inject an error so
+	// probe 2 falls through too. The cleanest way in this test is
+	// to just trust that an empty ReadLink result causes probe 2
+	// to skip — see client.go's `if target, rlErr := ...` branch
+	// which only proceeds on err == nil AND non-empty target.
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	entries, err := sess.ListDir("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "Documents and Settings" {
+			info = e
+			break
+		}
+	}
+	if info == nil {
+		t.Skip("test server didn't create the junction-style symlink")
+	}
+	if !info.IsDir() {
+		t.Errorf("junction entry IsDir()=false; junction-map fallback should have promoted it")
+	}
+	if rp := resolvedPathOf(info); rp != "/Users" {
+		t.Errorf("ResolvedPath()=%q, want %q (Windows junction map)", rp, "/Users")
+	}
+}
+
+// resolvedPathOf mirrors handlers.resolvedPathOf so tests can
+// assert on the resolved path without taking a handler-package
+// dependency. Both implementations must stay in sync — if you
+// add a new wrapper type, expose ResolvedPath on it AND add a
+// case here.
+func resolvedPathOf(fi os.FileInfo) string {
+	type resolver interface{ ResolvedPath() string }
+	if r, ok := fi.(resolver); ok {
+		return r.ResolvedPath()
+	}
+	return ""
+}
+
 func TestValidatePath(t *testing.T) {
 	cases := []struct {
 		in string

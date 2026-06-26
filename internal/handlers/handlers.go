@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -724,8 +725,20 @@ func (s *Server) handleDownloadZip(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		for _, e := range entries {
+			// If the entry was a symlink/junction that we
+			// resolved to a different directory (K10 datamover
+			// can't follow NTFS reparse points, so the helper
+			// resolves the link itself), recurse into the
+			// target path instead of the (broken) link path.
 			childRel := path.Join(rel, e.Name())
 			childAbs := path.Join(abs, e.Name())
+			if rp := resolvedPathOf(e); rp != "" {
+				// Keep the entry's original name in the archive
+				// (so "Documents and Settings" stays "Documents
+				// and Settings/" in the tar), but navigate to
+				// the resolved target underneath.
+				childAbs = rp
+			}
 			if err := rec(childRel, childAbs, e.IsDir()); err != nil {
 				return err
 			}
@@ -756,6 +769,20 @@ func sanitizeArchiveName(ref k8s.FRSRef, path string, isDir bool) string {
 		clean += ".tar.gz"
 	}
 	return clean
+}
+
+// resolvedPathOf returns the symlink/junction target for an
+// os.FileInfo if the helper has resolved one. The template and
+// zip walker use this so K10 datamover + NTFS junctions (which
+// the SFTP server can't follow) still navigate to their actual
+// content. Returns "" for regular entries and for junctions we
+// couldn't resolve.
+func resolvedPathOf(fi os.FileInfo) string {
+	type resolver interface{ ResolvedPath() string }
+	if r, ok := fi.(resolver); ok {
+		return r.ResolvedPath()
+	}
+	return ""
 }
 
 func parseFRSQuery(r *http.Request) (k8s.FRSRef, string, error) {
