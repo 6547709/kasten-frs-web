@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.3.43 (2026-06-26)
+
+- sftp: probe 2 (ReadLink) now handles ABSOLUTE symlink targets
+  returned by K10 datamover. NTFS junctions on the datamover
+  are stored with absolute targets that include the SFTP
+  chroot prefix (e.g. `/mnt/export/scheduled-.../Users`),
+  which is invisible from the SFTP client — passing the
+  absolute path through to ReadDir fails with "file does
+  not exist". Fix: when ReadLink returns an absolute target,
+  take just its basename and resolve it relative to the
+  parent directory. For the typical junction case the
+  basename IS the directory name (`Users`, `ProgramData`,
+  `Default`), so this lands on the navigable path.
+- deploy: drop `commonLabels: {app: kasten-frs-web-helper}`
+  from kustomization.yaml. Kustomize injects commonLabels
+  into EVERY resource's `spec.podSelector.matchLabels`,
+  including the NetworkPolicy `55-*.yaml` whose podSelector
+  is supposed to match FRS pods by `k10.kasten.io/frs-
+  generation=1` only. The injected `app=kasten-frs-web-
+  helper` label didn't match FRS pods (they don't carry
+  it), so the policy selected nothing and `default-deny`
+  blocked helper→FRS:2222 traffic silently. `oc apply -k
+  deploy/` re-injected the label on every rollout, masking
+  the issue between `oc delete` + `oc apply -f` manual
+  fixes. Removing commonLabels (and adding the few labels
+  in-line in each resource file) makes the policy stable
+  across rollouts.
+
 ## 0.3.42 (2026-06-26)
 
 - sftp: junction resolution gains a two-tier fallback after

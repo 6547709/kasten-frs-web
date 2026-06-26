@@ -243,7 +243,67 @@ func TestClient_ListDir_ReadLinkFallback(t *testing.T) {
 	}
 }
 
-// TestClient_ListDir_JunctionMapFallback exercises probe 3: the
+// TestClient_ListDir_ReadLinkAbsoluteFallback exercises the
+// case where the SFTP server returns an ABSOLUTE symlink target
+// (typical for K10 datamover exposing NTFS junctions — the
+// raw target string includes the SFTP chroot prefix like
+// "/mnt/export/.../Users", which is invisible from the SFTP
+// client). Probe 2 should treat the absolute target as a
+// basename-relative reference and resolve against the parent
+// directory.
+func TestClient_ListDir_ReadLinkAbsoluteFallback(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	// Build an absolute target pointing at a dir we control
+	// (real-dir). The testserver's fs.real() map this to a
+	// local path — but the helper only sees the absolute
+	// string and shouldn't trust it; it should fall back to
+	// "join(parent, basename(target))" = "/real-dir" and find
+	// that real dir under the SFTP root.
+	absTarget := filepath.Join(ts.RootDir(), "real-dir")
+	if err := os.Symlink(absTarget, filepath.Join(ts.RootDir(), "abs-link")); err != nil {
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
+
+	// Force probe 1 (OPENDIR on the link path) to fail so we
+	// exercise probe 2 (ReadLink + resolve).
+	ts.WithBrokenOpenDir("/abs-link")
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	entries, err := sess.ListDir("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "abs-link" {
+			info = e
+			break
+		}
+	}
+	if info == nil {
+		t.Skip("test server didn't create the abs-link symlink")
+	}
+	if !info.IsDir() {
+		t.Errorf("abs-target symlink IsDir()=false; ReadLink + basename-resolve fallback should have promoted it")
+	}
+	if rp := resolvedPathOf(info); rp != "/real-dir" {
+		t.Errorf("ResolvedPath()=%q, want %q (basename of absolute target joined to parent)", rp, "/real-dir")
+	}
+}
 // hardcoded Windows junction map. We register a Windows-style
 // junction name ("Documents and Settings") symlinked to a
 // real directory, configure the testserver to refuse both

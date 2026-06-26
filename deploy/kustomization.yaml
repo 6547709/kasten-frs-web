@@ -1,15 +1,25 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: kasten-io
-commonLabels:
-  app: kasten-frs-web-helper
 # Pin the image centrally so `oc apply -k deploy/` always rolls out a
 # known release instead of whatever tag is baked into 20-deployment.yaml
 # (which was stuck at v0.1.0). Override newTag — and newName for a
 # private registry mirror — here at deploy time.
+#
+# Note: deliberately NO `commonLabels:`. Earlier versions had
+# `commonLabels: { app: kasten-frs-web-helper }` for convenience,
+# but kustomize injects those labels into EVERY resource's
+# `spec.podSelector.matchLabels` — including 55-networkpolicy-
+# helper-access-frs.yaml, where the FRS-targeting podSelector
+# would then require BOTH `app=kasten-frs-web-helper` AND
+# `k10.kasten.io/frs-generation=1`. FRS pods only carry the
+# latter, so the selector matched nothing and ingress on port
+# 2222 was silently blocked by `default-deny`. Removing
+# commonLabels fixes that — each resource file now declares
+# the labels it needs in its own metadata.labels / spec.
 images:
 - name: ghcr.io/6547709/kasten-frs-web
-  newTag: v0.3.42
+  newTag: v0.3.43
 resources:
 - 05-serviceaccount.yaml
 - 06-rbac.yaml

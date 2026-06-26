@@ -168,8 +168,29 @@ func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 				"path", path, "name", info.Name(), "err", rlErr)
 		}
 		if rlErr == nil && target != "" {
+			// Resolve target against the parent directory.
+			//
+			// Windows NTFS junctions via K10 datamover
+			// typically have ABSOLUTE symlink targets that
+			// include the SFTP server's chroot prefix
+			// (e.g. /mnt/export/.../Users). From the SFTP
+			// client's view, the chroot prefix is invisible
+			// — ReadDir on the absolute path fails with
+			// "file does not exist". The actual navigable
+			// path is the junction's parent + the target's
+			// BASENAME (the target directory's name), which
+			// is exactly what an XP/2003-style NTFS junction
+			// resolves to on the client side.
+			//
+			// So if the target is absolute, we treat it as
+			// a relative reference by taking just its basename.
+			// For the common junction case (target ends in
+			// ".../Users" etc.) this is the same answer as a
+			// hand-typed relative path.
 			resolved := target
-			if !filepath.IsAbs(resolved) {
+			if filepath.IsAbs(resolved) {
+				resolved = filepath.Join(path, filepath.Base(resolved))
+			} else {
 				resolved = filepath.Join(path, resolved)
 			}
 			_, rderr := s.sftp.ReadDir(resolved)
