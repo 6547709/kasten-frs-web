@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -117,7 +118,7 @@ func TestClient_ListDir_FollowsSymlinkToDir(t *testing.T) {
 
 	// Before the fix, IsDir() returns false (pkg/sftp's Lstat
 	// reports os.ModeSymlink, not os.ModeDir). After the fix,
-	// ListDir follows the symlink via Stat and reports IsDir()=true
+	// ListDir probes via OPENDIR and reports IsDir()=true
 	// (and flips the Mode() bit to match).
 	if !linkInfo.IsDir() {
 		t.Errorf("symlink-to-dir entry IsDir()=false, want true (target IS a directory)")
@@ -136,6 +137,56 @@ func TestClient_ListDir_FollowsSymlinkToDir(t *testing.T) {
 	}
 	if len(inside) == 0 || inside[0].Name() != "inside.txt" {
 		t.Errorf("expected inside.txt in the symlinked dir, got %+v", inside)
+	}
+}
+
+// TestClient_ListDir_BrokenSymlinkStaysFile exercises the fallback
+// path: when the symlink probe fails (broken link, target
+// unreadable), ListDir falls back to the original symlink
+// FileInfo (no IsDir flip) so the user at least sees the row.
+func TestClient_ListDir_BrokenSymlinkStaysFile(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	// Add a broken symlink to the test root: target doesn't
+	// exist. pkg/sftp's ReadDir will list it as os.ModeSymlink;
+	// our probe (ReadDir on joined path) will fail. We expect
+	// the entry to come through with IsDir()=false so the user
+	// at least sees it.
+	broken := filepath.Join(ts.RootDir(), "broken-link")
+	if err := os.Symlink(filepath.Join(ts.RootDir(), "does-not-exist"), broken); err != nil {
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	entries, err := sess.ListDir("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var brokenInfo os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "broken-link" {
+			brokenInfo = e
+			break
+		}
+	}
+	if brokenInfo == nil {
+		t.Skip("test server didn't create the broken symlink")
+	}
+	if brokenInfo.IsDir() {
+		t.Errorf("broken symlink flipped to IsDir=true; probe should have failed and we should have kept the original symlink FileInfo")
 	}
 }
 

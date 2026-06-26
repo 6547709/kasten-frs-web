@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.41 (2026-06-26)
+
+- sftp: switch the junction probe from `Stat` to `OPENDIR`
+  (via `ReadDir` on the joined path). v0.3.40's `Stat`-based
+  probe was wrong: K10's datamover SFTP server returns
+  "file does not exist" for SSH_FXP_STAT on Windows NTFS
+  junctions (essentially LSTAT semantics for both LSTAT
+  and STAT), so the probe always failed and the entry
+  stayed as a file. OPENDIR is mandatory server semantics
+  (the server can't list the root without it) and ntfs-3g
+  follows reparse points at OPENDIR time, so a successful
+  OPENDIR is a reliable tell that the junction is
+  navigable. On success we wrap the FileInfo (IsDir=true,
+  ModeDir bit set); on failure we keep the original
+  symlink FileInfo so the user at least sees the row.
+  Cost: one extra OPENDIR+CLOSE per junction (a few
+  hundred ms in practice). The `sftp.listdir.symlink_
+  stat_failed` log line from v0.3.40 is replaced with
+  `sftp.listdir.symlink_probe_failed` /
+  `sftp.listdir.symlink_resolved_to_dir`.
+- sftp: add `TestClient_ListDir_BrokenSymlinkStaysFile`
+  to lock in the fallback path (broken symlink stays as
+  file rather than being silently dropped or misreported
+  as a directory).
+- sftp: testserver `Filelist.Stat` now uses `os.Lstat`
+  to mirror K10's datamover LSTAT-on-STAT behaviour, so
+  the symlink tests run against a server shape that's
+  closer to production.
+
 ## 0.3.40 (2026-06-26)
 
 - sftp: ListDir now follows symlinks so Windows directory

@@ -161,7 +161,10 @@ func (f *fs) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 		}
 		return &dirLister{entries: entries}, nil
 	case "Stat":
-		info, err := os.Stat(f.real(r.Filepath))
+		// SymlinkStat (LSTAT) — return the symlink itself, not the target.
+		// Mirrors what K10's datamover SFTP server does on SSH_FXP_LSTAT
+		// for Windows NTFS junctions.
+		info, err := os.Lstat(f.real(r.Filepath))
 		if err != nil {
 			return nil, err
 		}

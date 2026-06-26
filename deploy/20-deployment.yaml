@@ -32,7 +32,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
       - name: helper
-        image: ghcr.io/6547709/kasten-frs-web:v0.3.33
+        image: ghcr.io/6547709/kasten-frs-web:v0.3.41
         imagePullPolicy: IfNotPresent
         ports:
         - { name: http, containerPort: 8080 }

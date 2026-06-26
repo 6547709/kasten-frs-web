@@ -86,19 +86,33 @@ func (s *Session) Close() error {
 // check shows the user "this is a file" — they can't browse
 // into the linked directory.
 //
-// The fix: after ReadDir, do a follow-stat for any entry whose
-// mode includes os.ModeSymlink. If the target is a directory,
-// wrap the FileInfo so IsDir() reports true (and the Mode
-// bit matches). The rest of the stack — Open(), the
+// The fix: after ReadDir, for each entry whose mode includes
+// os.ModeSymlink, probe the path by issuing OPENDIR (via
+// ReadDir on the joined path) and immediately closing it.
+// OPENDIR is mandatory SFTP server semantics (the server has
+// to implement it or even the root listing wouldn't work),
+// and the OS-level mount underneath the server is what follows
+// NTFS junctions — so if ReadDir returns successfully, the
+// junction is navigable as a directory. (We tried Stat in
+// v0.3.40; K10's datamover SFTP server returns "file does not
+// exist" for SSH_FXP_STAT on junctions, so Stat is not a
+// reliable tell here. ReadDir is.)
+//
+// On success, wrap the FileInfo so IsDir() reports true (and
+// the Mode bit matches). The rest of the stack — Open(), the
 // download-zip walker, the path validation — all use the
 // wrapped FileInfo consistently, so the rest of the user
 // flow (clicking into the junction, downloading from it) just
-// works.
+// works. On failure, fall back to the original symlink
+// FileInfo so the user at least sees the entry (and the
+// inevitable 404 on click is a clear signal the link target
+// is unreachable, rather than the helper silently hiding it).
 //
-// Cost: one extra SFTP round trip per junction. On a typical
-// FRS-restore top level (a few junctions, mostly real dirs),
-// that's < 100ms total — well under the user's perception
-// threshold. For deeply-nested FRS restores, the cost is
+// Cost: one extra SFTP round trip per junction (ReadDir opens
+// a directory handle, fetches at least the . and .. entries,
+// and closes). On a typical FRS-restore top level (a few
+// junctions, mostly real dirs), that's a few hundred ms total
+// — well under the user's perception threshold. The cost is
 // bounded by the number of junctions in each listed dir, not
 // the total entry count.
 func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
@@ -113,32 +127,32 @@ func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 	out := make([]os.FileInfo, 0, len(infos))
 	for _, info := range infos {
 		// Most entries are regular files or directories; the
-		// symlink-follow is a no-op for those. Skip the
-		// Stat() call unless the mode says it's a symlink —
+		// symlink-probe is a no-op for those. Skip the
+		// ReadDir probe unless the mode says it's a symlink —
 		// saves a round trip per entry in the common case.
 		if info.Mode()&os.ModeSymlink == 0 {
 			out = append(out, info)
 			continue
 		}
-		// Follow the symlink (Stat, not Lstat) so we can see
-		// the target's real type. Errors here mean the link is
-		// broken or otherwise unreadable — fall back to the
-		// original symlink FileInfo so the user at least sees
-		// the entry.
-		targetInfo, statErr := s.sftp.Stat(filepath.Join(path, info.Name()))
-		if statErr != nil {
-			slog.Warn("sftp.listdir.symlink_stat_failed",
-				"path", path, "name", info.Name(), "err", statErr)
+		joined := filepath.Join(path, info.Name())
+		probe, probeErr := s.sftp.ReadDir(joined)
+		if probeErr != nil {
+			// Junction target unreachable from this SFTP
+			// server (e.g. datamover LSTAT-style for STAT,
+			// broken reparse, permission on the target).
+			// Fall back to the symlink entry so the user
+			// can still see the name; clicking will return
+			// a clear 404 from the Open() path rather than
+			// the helper silently dropping the row.
+			slog.Warn("sftp.listdir.symlink_probe_failed",
+				"path", path, "name", info.Name(), "err", probeErr)
 			out = append(out, info)
 			continue
 		}
-		if targetInfo.IsDir() {
-			out = append(out, &fileInfoWithDir{FileInfo: info, isDir: true})
-			slog.Debug("sftp.listdir.symlink_resolved_to_dir",
-				"path", path, "name", info.Name())
-		} else {
-			out = append(out, info)
-		}
+		_ = probe // we only care that OPENDIR succeeded
+		out = append(out, &fileInfoWithDir{FileInfo: info, isDir: true})
+		slog.Info("sftp.listdir.symlink_resolved_to_dir",
+			"path", path, "name", info.Name())
 	}
 	slog.Info("sftp.listdir", "path", path, "count", len(out))
 	return out, nil
