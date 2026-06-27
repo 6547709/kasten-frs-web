@@ -304,41 +304,44 @@ func TestClient_ListDir_ReadLinkAbsoluteFallback(t *testing.T) {
 		t.Errorf("ResolvedPath()=%q, want %q (basename of absolute target joined to parent)", rp, "/real-dir")
 	}
 }
-// hardcoded Windows junction map. We register a Windows-style
-// junction name ("Documents and Settings") symlinked to a
-// real directory, configure the testserver to refuse both
-// OPENDIR-on-link and READLINK (simulating a totally unco-
-// operative datamover), and assert the helper still resolves
-// the junction via the hardcoded map to "Users".
-func TestClient_ListDir_JunctionMapFallback(t *testing.T) {
+// ancestor-walk junction resolver at depth 1 (Users/All Users → /ProgramData),
+// depth 2 (Users/Alice/AppData → /Application Data), and depth 3
+// (Users/Alice/Documents/Profile → /UserProfile). These mirror the
+// real Windows FRS junction shapes — the target lives in an ancestor
+// directory of the junction, not next to it. The helper walks up
+// the parent chain looking for `<ancestor>/<target basename>`.
+//
+// All three tests follow the same pattern:
+//   - build a real target directory at the destination depth
+//   - build a symlink with a target whose basename matches the
+//     destination directory's name
+//   - block OPENDIR on the link path so probe 1 fails (matches
+//     K10 datamover behaviour for NTFS junctions)
+//   - assert IsDir()=true and ResolvedPath() points at the real
+//     target, NOT at the junction itself
+func TestClient_ListDir_AncestorWalk_Depth1(t *testing.T) {
 	ts, cleanup := StartSFTPTestServer(t)
 	defer cleanup()
 
-	// Create the Windows junction name (with a space, on purpose)
-	// pointing to "Users" — matches the hardcoded map.
-	target := filepath.Join(ts.RootDir(), "Users")
-	if err := os.Mkdir(target, 0o755); err != nil {
+	// /Users/All Users is a junction whose target basename is
+	// "ProgramData". The real /ProgramData directory lives at
+	// the volume ROOT, not inside Users/. The walk must go up
+	// one level (/Users → /) to find it.
+	target := filepath.Join(ts.RootDir(), "ProgramData")
+	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(target, "alice.txt"), []byte("hi"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(target, "marker.txt"), []byte("ok"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(ts.RootDir(), "Documents and Settings")); err != nil {
+	usersDir := filepath.Join(ts.RootDir(), "Users")
+	if err := os.MkdirAll(usersDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(usersDir, "All Users")); err != nil {
 		t.Skipf("symlink unsupported in test env: %v", err)
 	}
-
-	// Block both OPENDIR-on-link AND READLINK so probes 1+2
-	// miss. Probe 3 (junction map) is the only thing that can
-	// resolve it.
-	ts.WithBrokenOpenDir("/Documents and Settings")
-	// pkg/sftp's ReadLink is implemented via sftp_request_server.go's
-	// sshFxpReadlinkPacket which calls FileCmd. The default handler
-	// returns nil — so ReadLink "succeeds" but returns an empty
-	// string. We patch the FileCmd return to inject an error so
-	// probe 2 falls through too. The cleanest way in this test is
-	// to just trust that an empty ReadLink result causes probe 2
-	// to skip — see client.go's `if target, rlErr := ...` branch
-	// which only proceeds on err == nil AND non-empty target.
+	ts.WithBrokenOpenDir("/Users/All Users")
 
 	c, err := NewClient(ClientConfig{
 		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
@@ -353,25 +356,202 @@ func TestClient_ListDir_JunctionMapFallback(t *testing.T) {
 	}
 	defer sess.Close()
 
-	entries, err := sess.ListDir("/")
+	entries, err := sess.ListDir("/Users")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var info os.FileInfo
 	for _, e := range entries {
-		if e.Name() == "Documents and Settings" {
+		if e.Name() == "All Users" {
 			info = e
 			break
 		}
 	}
 	if info == nil {
-		t.Skip("test server didn't create the junction-style symlink")
+		t.Skip("test server didn't create the depth-1 junction")
 	}
 	if !info.IsDir() {
-		t.Errorf("junction entry IsDir()=false; junction-map fallback should have promoted it")
+		t.Errorf("depth-1 junction IsDir()=false; ancestor walk should have promoted it")
 	}
-	if rp := resolvedPathOf(info); rp != "/Users" {
-		t.Errorf("ResolvedPath()=%q, want %q (Windows junction map)", rp, "/Users")
+	if rp := resolvedPathOf(info); rp != "/ProgramData" {
+		t.Errorf("ResolvedPath()=%q, want %q (depth-1 ancestor walk: /Users/ProgramData miss → /ProgramData hit)", rp, "/ProgramData")
+	}
+}
+
+func TestClient_ListDir_AncestorWalk_Depth2(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	// /Users/Alice/AppData is a junction whose target basename
+	// is "Application Data". The real /Application Data
+	// directory lives at the volume ROOT, two ancestors up.
+	target := filepath.Join(ts.RootDir(), "Application Data")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliceDir := filepath.Join(ts.RootDir(), "Users", "Alice")
+	if err := os.MkdirAll(aliceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(aliceDir, "AppData")); err != nil {
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
+	ts.WithBrokenOpenDir("/Users/Alice/AppData")
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	entries, err := sess.ListDir("/Users/Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "AppData" {
+			info = e
+			break
+		}
+	}
+	if info == nil {
+		t.Skip("test server didn't create the depth-2 junction")
+	}
+	if !info.IsDir() {
+		t.Errorf("depth-2 junction IsDir()=false; ancestor walk should have promoted it")
+	}
+	if rp := resolvedPathOf(info); rp != "/Application Data" {
+		t.Errorf("ResolvedPath()=%q, want %q (depth-2 ancestor walk: /Users/Alice/Application Data miss → /Users/Application Data miss → /Application Data hit)", rp, "/Application Data")
+	}
+}
+
+func TestClient_ListDir_AncestorWalk_Depth3(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	// /Users/Alice/Documents/Profile is a junction whose target
+	// basename is "UserProfile". The real /UserProfile
+	// directory lives at the volume ROOT, three ancestors up.
+	target := filepath.Join(ts.RootDir(), "UserProfile")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	docDir := filepath.Join(ts.RootDir(), "Users", "Alice", "Documents")
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(docDir, "Profile")); err != nil {
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
+	ts.WithBrokenOpenDir("/Users/Alice/Documents/Profile")
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	entries, err := sess.ListDir("/Users/Alice/Documents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "Profile" {
+			info = e
+			break
+		}
+	}
+	if info == nil {
+		t.Skip("test server didn't create the depth-3 junction")
+	}
+	if !info.IsDir() {
+		t.Errorf("depth-3 junction IsDir()=false; ancestor walk should have promoted it")
+	}
+	if rp := resolvedPathOf(info); rp != "/UserProfile" {
+		t.Errorf("ResolvedPath()=%q, want %q (depth-3 ancestor walk)", rp, "/UserProfile")
+	}
+}
+
+// TestClient_ListDir_AncestorWalk_AbsoluteTarget covers the
+// K10 datamover case where ReadLink returns an absolute path
+// containing the SFTP chroot prefix. The ancestor walk keeps
+// only the basename, so the chroot prefix is dropped and the
+// walk proceeds normally — same answer as a relative target
+// with the same basename.
+func TestClient_ListDir_AncestorWalk_AbsoluteTarget(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	// Real target at the volume root. Symlink stores an
+	// absolute target string that doesn't match anything on
+	// disk (the testserver's fs.real() would map the absolute
+	// path through the chroot, but the helper must not trust
+	// it — it should fall back to basename-only).
+	target := filepath.Join(ts.RootDir(), "ProgramData")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	usersDir := filepath.Join(ts.RootDir(), "Users")
+	if err := os.MkdirAll(usersDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Point the symlink at an absolute path that LOOKS like a
+	// K10 chroot-prefixed target — the helper should keep only
+	// the basename ("ProgramData") and walk from there.
+	chrootTarget := "/mnt/export/scheduled-xyz/ProgramData"
+	if err := os.Symlink(chrootTarget, filepath.Join(usersDir, "All Users")); err != nil {
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
+	ts.WithBrokenOpenDir("/Users/All Users")
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	entries, err := sess.ListDir("/Users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "All Users" {
+			info = e
+			break
+		}
+	}
+	if info == nil {
+		t.Skip("test server didn't create the abs-target junction")
+	}
+	if !info.IsDir() {
+		t.Errorf("abs-target junction IsDir()=false; ancestor walk should have promoted it")
+	}
+	if rp := resolvedPathOf(info); rp != "/ProgramData" {
+		t.Errorf("ResolvedPath()=%q, want %q (basename of %q joined to ancestor /)", rp, "/ProgramData", chrootTarget)
 	}
 }
 

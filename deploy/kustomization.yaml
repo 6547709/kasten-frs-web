@@ -19,7 +19,7 @@ namespace: kasten-io
 # the labels it needs in its own metadata.labels / spec.
 images:
 - name: ghcr.io/6547709/kasten-frs-web
-  newTag: v0.3.44
+  newTag: v0.3.45
 resources:
 - 05-serviceaccount.yaml
 - 06-rbac.yaml

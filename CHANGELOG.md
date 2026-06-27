@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.3.45 (2026-06-27)
+
+- sftp: replace the hardcoded Windows-junction probe with a
+  depth-bounded ancestor walk. v0.3.42's probe 3 carried a
+  tiny table of well-known junctions (Documents and Settings
+  → Users, All Users → ProgramData, Default User → Default)
+  that worked only at depth 0 — it joined the table's target
+  onto the junction's own parent, so for `/Users/All Users`
+  it probed `/Users/ProgramData` (missing — ProgramData lives
+  at `/ProgramData`, the volume root) instead of the real
+  target. The new resolver drops the table entirely and uses
+  the NTFS invariant "a junction's target basename equals
+  the destination directory's name": we ReadLink the
+  junction, take the basename, then walk up the parent chain
+  probing `<ancestor>/<basename>` at each level up to depth
+  4. For `/Users/All Users` (target basename `ProgramData`):
+    depth 0: /Users/ProgramData (miss)
+    depth 1: /ProgramData      (hit)
+  For `/Users/Alice/Documents/Profile` (target basename
+  `UserProfile`):
+    depth 0: /Users/Alice/Documents/UserProfile (miss)
+    depth 1: /Users/Alice/UserProfile            (miss)
+    depth 2: /Users/UserProfile                  (miss)
+    depth 3: /UserProfile                        (hit)
+  Absolute ReadLink targets (K10 datamover's chroot-
+  prefixed strings like `/mnt/export/<job>/ProgramData`)
+  work the same way — we keep only the basename before
+  walking. The hardcoded `windowsJunctionTarget` function
+  and its four-entry table are deleted; the resolver is now
+  fully generic.
+- sftp: ancestor walk capped at `maxJunctionDepth = 4` —
+  covers any practical Windows restore layout. Each failed
+  probe is one ReadDir round trip; worst case is 4 round
+  trips per unresolved symlink (typical FRS top level has
+  a handful of junctions, mostly resolved in 1-2 hops).
+- sftp: tests for the old hardcode-map fallback removed;
+  replaced with `TestClient_ListDir_AncestorWalk_Depth1`,
+  `..._Depth2`, `..._Depth3` (nested junctions at increasing
+  depths) and `..._AbsoluteTarget` (K10-style chroot-
+  prefixed absolute symlink target). All four assert
+  IsDir=true and ResolvedPath pointing at the real
+  destination directory, NOT at the junction itself.
+
 ## 0.3.44 (2026-06-26)
 
 - handlers: fix the regression where /browse rendered an

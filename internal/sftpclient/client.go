@@ -96,31 +96,40 @@ func (s *Session) Close() error {
 //     reparse points. The mount layer underneath the SFTP server
 //     doesn't translate NTFS junctions at all.
 //
-// Current strategy (v0.3.42): probe with multiple methods, in
-// order of generality:
+// Current strategy (v0.3.45): probe with two methods, in order:
 //
 //  1. OPENDIR on the joined path. Works for any SFTP server that
 //     follows symlinks at OPENDIR time (the standard behaviour).
-//  2. SSH_FXP_READLINK on the joined path. This returns the
-//     symlink's textual target, which the SFTP server can serve
-//     without resolving at the mount layer — it's just bytes from
-//     a metadata block. We then resolve the target ourselves
-//     (relative → absolute against the parent dir) and probe
-//     that resolved path with ReadDir.
-//  3. Windows junction map. A small table of well-known Windows
-//     NTFS reparse points and their canonical targets
-//     (Documents and Settings → Users, All Users → ProgramData,
-//     Default User → Default). Used as a last-resort fallback
-//     when the SFTP server can't even serve the symlink text.
+//  2. SSH_FXP_READLINK on the joined path, then an ancestor
+//     walk that probes `<ancestor>/<basename(target)>` at each
+//     parent level up to depth 4. This is a generic junction
+//     resolver — no hardcoded map — and relies on the NTFS
+//     invariant that a junction's target BASENAME is the name
+//     of the destination directory (though the destination may
+//     live in a sibling or ancestor directory, not necessarily
+//     the junction's own parent).
 //
-// On any successful probe (1/2/3), we wrap the FileInfo with
+//     Why ancestor walk and not a flat join(parent, target)?
+//     For junctions nested under Users/ (e.g. Users/All Users,
+//     Users/Default User), the destination is at the volume
+//     ROOT (ProgramData, Default), not next to the junction.
+//     Probing only `<parent>/<base>` would miss these. Walking
+//     up the parent chain handles arbitrary nesting — for the
+//     typical Windows restore this resolves in 1-2 hops.
+//
+//     Absolute ReadLink targets (K10 datamover returns
+//     "/mnt/export/<job>/ProgramData" — a chroot-prefixed
+//     absolute path invisible from the SFTP client) are
+//     handled by stripping the absolute prefix and keeping
+//     only the basename, then walking ancestors.
+//
+// On any successful probe, we wrap the FileInfo with
 // fileInfoWithDir so IsDir() reports true and the Mode() bit
-// matches. If the probe that succeeded is (2) or (3), we also
-// record the resolved absolute path so the rest of the stack
-// (the browse template's click URL, the download handler, the
-// zip walker) navigates to the TARGET instead of the link
-// itself — the link's path is unreachable on this server, but
-// the target's path is.
+// matches. If probe 2 succeeded, we also record the resolved
+// absolute path so the rest of the stack (the browse template's
+// click URL, the download handler, the zip walker) navigates
+// to the TARGET instead of the link itself — the link's path
+// is unreachable on this server, but the target's path is.
 //
 // On total failure, fall back to the original symlink FileInfo
 // so the user at least sees the entry; clicking will return a
@@ -161,69 +170,46 @@ func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 			continue
 		}
 
-		// Probe 2: READLINK + resolve + OPENDIR on target.
-		target, rlErr := s.sftp.ReadLink(joined)
-		if rlErr != nil {
-			slog.Warn("sftp.listdir.symlink_readlink_failed",
-				"path", path, "name", info.Name(), "err", rlErr)
-		}
-		if rlErr == nil && target != "" {
-			// Resolve target against the parent directory.
-			//
-			// Windows NTFS junctions via K10 datamover
-			// typically have ABSOLUTE symlink targets that
-			// include the SFTP server's chroot prefix
-			// (e.g. /mnt/export/.../Users). From the SFTP
-			// client's view, the chroot prefix is invisible
-			// — ReadDir on the absolute path fails with
-			// "file does not exist". The actual navigable
-			// path is the junction's parent + the target's
-			// BASENAME (the target directory's name), which
-			// is exactly what an XP/2003-style NTFS junction
-			// resolves to on the client side.
-			//
-			// So if the target is absolute, we treat it as
-			// a relative reference by taking just its basename.
-			// For the common junction case (target ends in
-			// ".../Users" etc.) this is the same answer as a
-			// hand-typed relative path.
-			resolved := target
-			if filepath.IsAbs(resolved) {
-				resolved = filepath.Join(path, filepath.Base(resolved))
-			} else {
-				resolved = filepath.Join(path, resolved)
-			}
-			_, rderr := s.sftp.ReadDir(resolved)
-			if rderr != nil {
-				slog.Warn("sftp.listdir.symlink_readlink_target_probe_failed",
-					"path", path, "name", info.Name(),
-					"target", target, "resolved", resolved, "err", rderr)
-			}
-			if rderr == nil {
-				out = append(out, &fileInfoWithDir{
-					FileInfo:     info,
-					isDir:        true,
-					resolvedPath: resolved,
-				})
-				slog.Info("sftp.listdir.symlink_resolved_via_readlink",
-					"path", path, "name", info.Name(),
-					"target", target, "resolved", resolved)
-				continue
-			}
-		}
-
-		// Probe 3: hardcoded Windows junction map.
-		if mapped, ok := windowsJunctionTarget(info.Name()); ok {
-			resolved := filepath.Join(path, mapped)
-			if _, err := s.sftp.ReadDir(resolved); err == nil {
-				out = append(out, &fileInfoWithDir{
-					FileInfo:     info,
-					isDir:        true,
-					resolvedPath: resolved,
-				})
-				slog.Info("sftp.listdir.symlink_resolved_via_junction_map",
-					"path", path, "name", info.Name(), "resolved", resolved)
-				continue
+		// Probe 2: READLINK + ancestor walk.
+		//
+		// ReadLink returns the symlink's textual target. For NTFS
+		// junctions exposed via K10 datamover, the target's
+		// basename is identical to the destination directory's
+		// name (the canonical NTFS invariant: a junction named X
+		// in directory D resolves to a directory also named X,
+		// but not necessarily inside D — for cross-volume
+		// junctions it lives in a sibling/ancestor directory).
+		//
+		// We walk up the parent chain, trying `<ancestor>/<base>`
+		// at each level. This handles arbitrary nesting — for a
+		// junction at /Users/All Users the target basename is
+		// "ProgramData" and the walk probes:
+		//   depth 0: /Users/ProgramData (likely missing)
+		//   depth 1: /ProgramData      (the real one)
+		// For /Users/Alice/Desktop → /Users/Common/Desktop:
+		//   depth 0: /Users/Alice/Desktop (the junction itself)
+		//   depth 1: /Users/Desktop      (likely missing)
+		//   depth 2: /Desktop            (likely missing)
+		//   (no match — the ancestor walk stops at depth 4)
+		//
+		// Absolute ReadLink targets (typical of K10 datamover:
+		// "/mnt/export/<job>/ProgramData") get the same treatment
+		// because we only keep the basename; the chroot prefix is
+		// invisible from the SFTP client anyway.
+		if target, rlErr := s.sftp.ReadLink(joined); rlErr == nil && target != "" {
+			base := filepath.Base(target)
+			if base != "" && base != "." && base != "/" && base != ".." {
+				if resolved, depth := ancestorWalkResolve(s.sftp, path, base); resolved != "" {
+					out = append(out, &fileInfoWithDir{
+						FileInfo:     info,
+						isDir:        true,
+						resolvedPath: resolved,
+					})
+					slog.Info("sftp.listdir.symlink_resolved_via_ancestor_walk",
+						"path", path, "name", info.Name(),
+						"target", target, "resolved", resolved, "depth", depth)
+					continue
+				}
 			}
 		}
 
@@ -240,27 +226,45 @@ func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 	return out, nil
 }
 
-// windowsJunctionTarget returns the canonical target name of a
-// well-known Windows NTFS reparse point if `name` matches one.
-// The map covers the four junction names that show up on every
-// Windows FRS restore:
+// ancestorWalkResolve probes ReadDir at each ancestor + basename
+// combination, walking up the parent chain. Returns the first
+// existing directory and the depth at which it was found, or
+// ("", 0) if no ancestor up to maxJunctionDepth contains a
+// matching directory.
 //
-//	Documents and Settings → Users     (XP-era compatibility)
-//	Users\All Users         → ProgramData
-//	Users\Default User      → Default
-//	Documents and Settings\All Users → ProgramData (defensive)
+// The NTFS invariant that makes this work: a junction's target
+// basename equals the destination directory's name. The
+// destination may live in the junction's parent OR in any
+// ancestor (e.g. Users/All Users → /ProgramData, where the
+// destination lives at the volume root, not at Users/). We
+// walk up the parent chain so we find it regardless of how
+// deeply nested the junction is.
 //
-// Returns (target, true) on hit, ("", false) otherwise.
-func windowsJunctionTarget(name string) (string, bool) {
-	switch name {
-	case "Documents and Settings":
-		return "Users", true
-	case "All Users":
-		return "ProgramData", true
-	case "Default User":
-		return "Default", true
+// maxJunctionDepth = 4 covers the practical Windows restore
+// layout (depth 1 for root-level junctions, depth 2 for
+// Users/Alice junctions, depth 3-4 for pathological cases).
+// Each failed probe is a single ReadDir round trip; total cost
+// is bounded by 4 ReadDir calls per unresolved symlink.
+func ancestorWalkResolve(client *sftp.Client, parent, base string) (string, int) {
+	const maxJunctionDepth = 4
+	candidate := parent
+	for depth := 0; depth <= maxJunctionDepth; depth++ {
+		resolved := filepath.Join(candidate, base)
+		if _, err := client.ReadDir(resolved); err == nil {
+			return resolved, depth
+		}
+		if candidate == "/" || candidate == "." {
+			break
+		}
+		next := filepath.Dir(candidate)
+		if next == candidate {
+			// filepath.Dir collapses on the root segment, e.g.
+			// filepath.Dir("/Users") = "/Users" — stop here.
+			break
+		}
+		candidate = next
 	}
-	return "", false
+	return "", 0
 }
 
 // fileInfoWithDir wraps an os.FileInfo and overrides IsDir() /
