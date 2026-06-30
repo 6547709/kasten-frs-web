@@ -57,8 +57,15 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 
 // Session is a live SFTP session.
 type Session struct {
-	sftp *sftp.Client
-	ssh  *ssh.Client
+	sftp        *sftp.Client
+	ssh         *ssh.Client
+	chrootDepth int // # of leading components of an absolute symlink
+	//            target that are the SFTP chroot prefix (i.e.
+	//            invisible from this client). 0 = not yet
+	//            discovered; lazily learned from the first
+	//            absolute-target ReadLink on this session and
+	//            reused for every subsequent junction. See
+	//            resolveAbsoluteTarget.
 }
 
 // Close terminates the SFTP and underlying SSH connection.
@@ -96,32 +103,24 @@ func (s *Session) Close() error {
 //     reparse points. The mount layer underneath the SFTP server
 //     doesn't translate NTFS junctions at all.
 //
-// Current strategy (v0.3.45): probe with two methods, in order:
+// Current strategy (v0.3.46): probe with two methods, in order:
 //
 //  1. OPENDIR on the joined path. Works for any SFTP server that
 //     follows symlinks at OPENDIR time (the standard behaviour).
-//  2. SSH_FXP_READLINK on the joined path, then an ancestor
-//     walk that probes `<ancestor>/<basename(target)>` at each
-//     parent level up to depth 4. This is a generic junction
-//     resolver — no hardcoded map — and relies on the NTFS
-//     invariant that a junction's target BASENAME is the name
-//     of the destination directory (though the destination may
-//     live in a sibling or ancestor directory, not necessarily
-//     the junction's own parent).
-//
-//     Why ancestor walk and not a flat join(parent, target)?
-//     For junctions nested under Users/ (e.g. Users/All Users,
-//     Users/Default User), the destination is at the volume
-//     ROOT (ProgramData, Default), not next to the junction.
-//     Probing only `<parent>/<base>` would miss these. Walking
-//     up the parent chain handles arbitrary nesting — for the
-//     typical Windows restore this resolves in 1-2 hops.
-//
-//     Absolute ReadLink targets (K10 datamover returns
-//     "/mnt/export/<job>/ProgramData" — a chroot-prefixed
-//     absolute path invisible from the SFTP client) are
-//     handled by stripping the absolute prefix and keeping
-//     only the basename, then walking ancestors.
+//  2. SSH_FXP_READLINK + chroot-strip. K10 datamover returns
+//     absolute targets with an internal mount prefix the SFTP
+//     client can't see (e.g. "/mnt/export/<job>/<vol>/Users/
+//     Public/Documents"). Strip the leading N components
+//     (N = the chroot depth) and the result is the SFTP-
+//     relative path. N is unknown up-front, so we discover it
+//     lazily: try N = 1, 2, 3, ... up to 5; the first one that
+//     yields a valid ReadDir is the answer, cached on the
+//     session for all subsequent junctions. This handles every
+//     Windows junction shape on a real FRS restore — including
+//     the ones the v0.3.45 ancestor walk got wrong (Application
+//     Data, Templates, 「开始」菜单, 桌面, etc.). Falls back to
+//     the v0.3.45 ancestor walk if no depth works or the target
+//     is relative (rare).
 //
 // On any successful probe, we wrap the FileInfo with
 // fileInfoWithDir so IsDir() reports true and the Mode() bit
@@ -170,33 +169,54 @@ func (s *Session) ListDir(path string) ([]os.FileInfo, error) {
 			continue
 		}
 
-		// Probe 2: READLINK + ancestor walk.
+		// Probe 2: READLINK + chroot-strip + ancestor-walk fallback.
 		//
-		// ReadLink returns the symlink's textual target. For NTFS
-		// junctions exposed via K10 datamover, the target's
-		// basename is identical to the destination directory's
-		// name (the canonical NTFS invariant: a junction named X
-		// in directory D resolves to a directory also named X,
-		// but not necessarily inside D — for cross-volume
-		// junctions it lives in a sibling/ancestor directory).
+		// ReadLink returns the symlink's textual target. K10
+		// datamover serves absolute targets that include the SFTP
+		// chroot prefix (e.g. "/mnt/export/<job>/<vol>/Users/Public/
+		// Documents" for a ProgramData/Documents junction). The
+		// SFTP client can't see past the chroot, so the absolute
+		// path is unreachable as-is — but stripping the chroot
+		// prefix gives the SFTP-relative path, which IS reachable.
 		//
-		// We walk up the parent chain, trying `<ancestor>/<base>`
-		// at each level. This handles arbitrary nesting — for a
-		// junction at /Users/All Users the target basename is
-		// "ProgramData" and the walk probes:
-		//   depth 0: /Users/ProgramData (likely missing)
-		//   depth 1: /ProgramData      (the real one)
-		// For /Users/Alice/Desktop → /Users/Common/Desktop:
-		//   depth 0: /Users/Alice/Desktop (the junction itself)
-		//   depth 1: /Users/Desktop      (likely missing)
-		//   depth 2: /Desktop            (likely missing)
-		//   (no match — the ancestor walk stops at depth 4)
+		// We don't know the chroot prefix up-front (it's an
+		// internal K10 datamover mount path that varies across
+		// installs), so we discover it lazily: for the first
+		// absolute target on a given session, try stripping 1, 2,
+		// 3, ... leading path components and see which one
+		// produces a valid SFTP-relative path on the first
+		// ReadDir. The depth that succeeds is the chroot prefix's
+		// component count; cache it on the session and reuse for
+		// every subsequent junction on this connection. Subsequent
+		// junctions cost one ReadDir round trip.
 		//
-		// Absolute ReadLink targets (typical of K10 datamover:
-		// "/mnt/export/<job>/ProgramData") get the same treatment
-		// because we only keep the basename; the chroot prefix is
-		// invisible from the SFTP client anyway.
+		// This handles every Windows junction shape we observed
+		// on the live cluster — including ones the v0.3.45
+		// ancestor walk got wrong (Application Data, Templates,
+		// 「开始」菜单, 桌面, etc.). The ancestor walk is kept as
+		// a fallback for the cases chroot-stripping can't handle
+		// (relative targets, target shapes that match no
+		// reasonable chroot depth).
 		if target, rlErr := s.sftp.ReadLink(joined); rlErr == nil && target != "" {
+			if filepath.IsAbs(target) {
+				if resolved := s.resolveAbsoluteTarget(target); resolved != "" {
+					out = append(out, &fileInfoWithDir{
+						FileInfo:     info,
+						isDir:        true,
+						resolvedPath: resolved,
+					})
+					slog.Info("sftp.listdir.symlink_resolved_via_chroot_strip",
+						"path", path, "name", info.Name(),
+						"target", target, "resolved", resolved,
+						"chroot_depth", s.chrootDepth)
+					continue
+				}
+			}
+			// Relative target, OR absolute target whose chroot
+			// couldn't be derived. Fall back to the v0.3.45
+			// ancestor walk — handles junctions where the target
+			// basename happens to coincide with a directory at
+			// some ancestor level.
 			base := filepath.Base(target)
 			if base != "" && base != "." && base != "/" && base != ".." {
 				if resolved, depth := ancestorWalkResolve(s.sftp, path, base); resolved != "" {
@@ -265,6 +285,76 @@ func ancestorWalkResolve(client *sftp.Client, parent, base string) (string, int)
 		candidate = next
 	}
 	return "", 0
+}
+
+// resolveAbsoluteTarget maps an absolute ReadLink target to its
+// SFTP-relative path by stripping the chroot prefix, and caches the
+// discovered chroot depth on the Session so subsequent junctions on
+// the same connection cost only one ReadDir round trip.
+//
+// K10 datamover's absolute targets look like
+// "/mnt/export/<job-id>/<volume>/<rest>" (the leading components
+// are the datamover's internal mount path, invisible from the SFTP
+// client). The SFTP-relative equivalent is "/<job-id>/<volume>/<rest>"
+// — exactly the target with the first N components removed, where N
+// is the chroot prefix's component count.
+//
+// We don't know N up-front. For the first absolute target we see on
+// a session, we try N = 1, 2, 3, ... up to maxChrootDepth; the first
+// N whose ReadDir succeeds is the answer, cached on the session.
+// Subsequent calls use the cached N for a single ReadDir. If the
+// cached N stops working (rare — would mean a second chroot mount
+// appeared mid-session), we transparently fall back to re-discovery.
+//
+// Returns the resolved SFTP-relative path, or "" if no depth
+// produced a valid directory.
+func (s *Session) resolveAbsoluteTarget(target string) string {
+	const maxChrootDepth = 5
+	parts := strings.Split(filepath.Clean(target), "/")
+	// parts[0] is the empty string produced by Split on a
+	// leading-slash path; meaningful components start at parts[1].
+	// chrootDepth = N means strip the first N meaningful components,
+	// so the kept suffix is parts[N+1:].
+
+	if s.chrootDepth > 0 {
+		// Cached fast path: single ReadDir.
+		if s.chrootDepth+1 < len(parts) {
+			suffix := strings.Join(parts[s.chrootDepth+1:], "/")
+			if suffix != "" {
+				sftpPath := "/" + suffix
+				if _, err := s.sftp.ReadDir(sftpPath); err == nil {
+					return sftpPath
+				}
+			}
+		}
+		// Cached depth stopped working — invalidate and
+		// re-discover. Could happen if the SFTP root changed
+		// mid-session (different FRS pool entry, container
+		// restart, etc.). Cheap to retry.
+		slog.Warn("sftp.chroot_depth_invalidated",
+			"previous_depth", s.chrootDepth, "target", target)
+		s.chrootDepth = 0
+	}
+
+	// Discovery: try depths 1..maxChrootDepth.
+	for depth := 1; depth <= maxChrootDepth; depth++ {
+		if depth+1 >= len(parts) {
+			break
+		}
+		suffix := strings.Join(parts[depth+1:], "/")
+		if suffix == "" {
+			continue
+		}
+		sftpPath := "/" + suffix
+		if _, err := s.sftp.ReadDir(sftpPath); err == nil {
+			s.chrootDepth = depth
+			slog.Info("sftp.chroot_depth_discovered",
+				"depth", depth, "sample_target", target,
+				"sample_resolved", sftpPath)
+			return sftpPath
+		}
+	}
+	return ""
 }
 
 // fileInfoWithDir wraps an os.FileInfo and overrides IsDir() /

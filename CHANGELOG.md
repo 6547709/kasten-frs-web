@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.3.46 (2026-06-30)
+
+- sftp: junction resolution gains chroot-stripping, the actual
+  fix for the Windows FRS restore layout that v0.3.45's ancestor
+  walk only partially addressed. v0.3.45's heuristic ("target
+  basename matches some ancestor's basename") works for the
+  simple junctions (Documents and Settings, Users/All Users,
+  Users/Default User) but fails for every junction whose
+  destination basename doesn't appear anywhere in the parent
+  chain — which is most of them on a real Windows FRS volume.
+  Live-cluster inspection of the FRS mounter pod showed that
+  ProgramData/{Documents, Templates, 「开始」菜单, 桌面},
+  Users/<name>/{Application Data, My Documents, Cookies, ...},
+  and ProgramData/Application Data (a self-loop) all had
+  unresolvable targets under v0.3.45.
+  Fix: probe 2 now strips the SFTP chroot prefix from absolute
+  ReadLink targets. K10 datamover returns absolute targets
+  with the datamover's internal mount path prepended
+  ("/mnt/export/<job>/<vol>/<rest>" on this cluster, but
+  unspecified in general). The SFTP client can't see past
+  that prefix, so we discover how many leading components
+  belong to the chroot by trying ReadDir at each possible
+  chroot depth (1..5) and using the first one that produces
+  a valid SFTP-relative path. The discovered depth is cached
+  on the Session struct — every subsequent junction on the
+  same connection costs only one ReadDir. After discovery, the
+  helper resolves every junction shape on the live volume
+  correctly:
+    ProgramData/Documents         → /Users/Public/Documents
+    ProgramData/Templates         → /ProgramData/Microsoft/Windows/Templates
+    ProgramData/「开始」菜单   → /ProgramData/Microsoft/Windows/Start Menu
+    ProgramData/桌面               → /Users/Public/Desktop
+    ProgramData/Application Data  → /ProgramData (self-loop, NTFS-correct)
+    Users/Alice/My Documents      → /Users/Alice/Documents
+    Users/Alice/Application Data  → /Users/Alice/AppData/Roaming
+    Users/Alice/Cookies           → /Users/Alice/AppData/Local/Microsoft/Windows/INetCookies
+    Users/Alice/Templates         → /Users/Alice/AppData/Roaming/Microsoft/Windows/Templates
+  v0.3.45's ancestor walk is kept as a fallback for the rare
+  case where chroot-stripping can't derive a depth (e.g. all
+  candidates fail ReadDir, which shouldn't happen on a real
+  datamover but defends against test/edge cases).
+- sftp: tests — `TestClient_ListDir_ChrootStrip_TypicalK10Datamover`
+  covers a Documents-style junction with the production-shaped
+  target. `..._SelfLoop` covers Application Data pointing back
+  at its parent. `..._CachedDepth` verifies the cache is
+  populated by the first junction and reused for the second.
+  `..._DeeplyNested` covers a 4-suffix-component target
+  (Templates-style). All four assert both the resolved
+  SFTP-relative path AND `sess.chrootDepth == 2` (the
+  discovery value for a 2-component "/mnt/export" chroot).
+
 ## 0.3.45 (2026-06-27)
 
 - sftp: replace the hardcoded Windows-junction probe with a

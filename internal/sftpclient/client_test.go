@@ -555,6 +555,329 @@ func TestClient_ListDir_AncestorWalk_AbsoluteTarget(t *testing.T) {
 	}
 }
 
+// Chroot-stripping tests (v0.3.46).
+//
+// These mirror the live cluster's junction shapes: every NTFS
+// junction target returned by K10 datamover is absolute and
+// carries the datamover's internal mount prefix (typically
+// "/mnt/export/<job-id>/<volume>/<rest>"). The SFTP chroot is
+// the mount path; the SFTP-relative equivalent is just the
+// target minus the chroot's leading components.
+//
+// The helper discovers the chroot depth lazily on the first
+// absolute target seen per session, then reuses it for every
+// subsequent junction. Tests below create junctions with the
+// production-shaped targets and verify the helper resolves
+// them to the correct SFTP-relative path.
+
+// TestClient_ListDir_ChrootStrip_TypicalK10Datamover covers the
+// canonical case: a ProgramData/Documents junction whose target
+// is "/mnt/export/<job>/<vol>/Users/Public/Documents". The
+// helper should strip the 2-component chroot ("/mnt/export")
+// and resolve to the SFTP-relative path
+// "/<job>/<vol>/Users/Public/Documents".
+func TestClient_ListDir_ChrootStrip_TypicalK10Datamover(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	// Build the production-shaped directory tree:
+	//   /scheduled-xyz/win2025-uefi01-volume/
+	//     ProgramData/
+	//       Documents (junction -> /mnt/export/.../Users/Public/Documents)
+	//     Users/Public/Documents/   (real dir, the destination)
+	const jobID = "scheduled-xyz"
+	const volName = "win2025-uefi01-volume"
+	target := filepath.Join(ts.RootDir(), jobID, volName, "Users", "Public", "Documents")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "marker.txt"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	programData := filepath.Join(ts.RootDir(), jobID, volName, "ProgramData")
+	if err := os.MkdirAll(programData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	junction := filepath.Join(programData, "Documents")
+	absTarget := "/mnt/export/" + jobID + "/" + volName + "/Users/Public/Documents"
+	if err := os.Symlink(absTarget, junction); err != nil {
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
+	// Force probe 1 (OPENDIR-on-link) to fail so probe 2 runs.
+	junctionInSFTP := "/" + jobID + "/" + volName + "/ProgramData/Documents"
+	ts.WithBrokenOpenDir(junctionInSFTP)
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	programDataSFTP := "/" + jobID + "/" + volName + "/ProgramData"
+	entries, err := sess.ListDir(programDataSFTP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "Documents" {
+			info = e
+			break
+		}
+	}
+	if info == nil {
+		t.Skip("test server didn't create the Documents junction")
+	}
+	if !info.IsDir() {
+		t.Errorf("Documents junction IsDir()=false; chroot-strip should have promoted it")
+	}
+	wantResolved := "/" + jobID + "/" + volName + "/Users/Public/Documents"
+	if rp := resolvedPathOf(info); rp != wantResolved {
+		t.Errorf("ResolvedPath()=%q, want %q (chroot-stripped SFTP-relative path)", rp, wantResolved)
+	}
+	if sess.chrootDepth != 2 {
+		t.Errorf("sess.chrootDepth = %d, want 2 (chroot = /mnt/export = 2 components)", sess.chrootDepth)
+	}
+}
+
+// TestClient_ListDir_ChrootStrip_SelfLoop covers the
+// NTFS-internal self-referential junction:
+//   ProgramData/Application Data -> /mnt/export/.../ProgramData
+// The target's basename IS the parent's name; the only
+// "destination" is the parent directory itself. The chroot
+// stripper should resolve this to the parent's SFTP path,
+// which on a real Windows system would re-show ProgramData's
+// contents (the loop is by design — legacy compatibility).
+func TestClient_ListDir_ChrootStrip_SelfLoop(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	const jobID = "scheduled-xyz"
+	const volName = "win2025-uefi01-volume"
+	programData := filepath.Join(ts.RootDir(), jobID, volName, "ProgramData")
+	if err := os.MkdirAll(programData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	junction := filepath.Join(programData, "Application Data")
+	// Target points BACK at ProgramData — the NTFS self-loop.
+	absTarget := "/mnt/export/" + jobID + "/" + volName + "/ProgramData"
+	if err := os.Symlink(absTarget, junction); err != nil {
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
+	junctionInSFTP := "/" + jobID + "/" + volName + "/ProgramData/Application Data"
+	ts.WithBrokenOpenDir(junctionInSFTP)
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	programDataSFTP := "/" + jobID + "/" + volName + "/ProgramData"
+	entries, err := sess.ListDir(programDataSFTP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "Application Data" {
+			info = e
+			break
+		}
+	}
+	if info == nil {
+		t.Skip("test server didn't create the Application Data junction")
+	}
+	if !info.IsDir() {
+		t.Errorf("Application Data junction IsDir()=false; chroot-strip should have promoted it")
+	}
+	// ResolvedPath == parent path == the SFTP-relative ProgramData.
+	wantResolved := programDataSFTP
+	if rp := resolvedPathOf(info); rp != wantResolved {
+		t.Errorf("ResolvedPath()=%q, want %q (self-loop resolves to parent)", rp, wantResolved)
+	}
+	if sess.chrootDepth != 2 {
+		t.Errorf("sess.chrootDepth = %d, want 2", sess.chrootDepth)
+	}
+}
+
+// TestClient_ListDir_ChrootStrip_CachedDepth verifies the cache
+// behaviour: two absolute targets on the same session — only the
+// FIRST triggers discovery (N = 1..5 round trips); the SECOND
+// uses the cached depth (single ReadDir). The test checks
+// sess.chrootDepth is set after the first junction and that
+// both junctions resolve correctly.
+func TestClient_ListDir_ChrootStrip_CachedDepth(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	const jobID = "scheduled-xyz"
+	const volName = "win2025-uefi01-volume"
+	volRoot := filepath.Join(ts.RootDir(), jobID, volName)
+	if err := os.MkdirAll(volRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two junctions with different subtrees, both with the
+	// 2-component chroot prefix "/mnt/export".
+	targets := []struct{ junction, absTarget, wantResolved string }{
+		{
+			junction:     filepath.Join(volRoot, "One"),
+			absTarget:   "/mnt/export/" + jobID + "/" + volName + "/Users/Public/Documents",
+			wantResolved: "/" + jobID + "/" + volName + "/Users/Public/Documents",
+		},
+		{
+			junction:     filepath.Join(volRoot, "Two"),
+			absTarget:   "/mnt/export/" + jobID + "/" + volName + "/ProgramData/Microsoft/Windows/Templates",
+			wantResolved: "/" + jobID + "/" + volName + "/ProgramData/Microsoft/Windows/Templates",
+		},
+	}
+	for _, tgt := range targets {
+		// Build the SFTP-server-side path that mirrors the absolute
+		// target with the chroot stripped. The testserver's fs.real()
+		// strips the leading "/" and joins with rootDir, so a path
+		// like "/scheduled-xyz/.../Users/Public/Documents" maps to
+		// "<rootDir>/scheduled-xyz/.../Users/Public/Documents" on disk.
+		sftpMirrored := tgt.absTarget[len("/mnt/export"):]
+		fullSftpMirrored := filepath.Join(ts.RootDir(), sftpMirrored)
+		if err := os.MkdirAll(fullSftpMirrored, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(tgt.absTarget, tgt.junction); err != nil {
+			t.Skipf("symlink unsupported in test env: %v", err)
+		}
+		// Force probe 1 (OPENDIR-on-link) to fail so probe 2
+		// (chroot-strip) is exercised. Mirrors K10 datamover's
+		// "doesn't follow NTFS junctions at OPENDIR" behaviour.
+		linkInSFTP := "/" + jobID + "/" + volName + "/" + filepath.Base(tgt.junction)
+		ts.WithBrokenOpenDir(linkInSFTP)
+	}
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	volRootSFTP := "/" + jobID + "/" + volName
+	entries, err := sess.ListDir(volRootSFTP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both junctions should be promoted to dirs with the right
+	// resolved paths.
+	found := map[string]string{}
+	for _, e := range entries {
+		for _, tgt := range targets {
+			if e.Name() == filepath.Base(tgt.junction) {
+				found[tgt.wantResolved] = resolvedPathOf(e)
+			}
+		}
+	}
+	for want, got := range found {
+		if got != want {
+			t.Errorf("ResolvedPath = %q, want %q", got, want)
+		}
+	}
+	if sess.chrootDepth != 2 {
+		t.Errorf("sess.chrootDepth = %d, want 2 (cached after first junction)", sess.chrootDepth)
+	}
+}
+
+// TestClient_ListDir_ChrootStrip_DeeplyNested covers a junction
+// whose target suffix is many components deep. Mirrors the live
+// ProgramData/Templates junction whose target is
+// "/mnt/export/<job>/<vol>/ProgramData/Microsoft/Windows/Templates"
+// (4 suffix components after stripping the 2-component chroot).
+func TestClient_ListDir_ChrootStrip_DeeplyNested(t *testing.T) {
+	ts, cleanup := StartSFTPTestServer(t)
+	defer cleanup()
+
+	const jobID = "scheduled-xyz"
+	const volName = "win2025-uefi01-volume"
+	deepPath := filepath.Join(ts.RootDir(), jobID, volName,
+		"ProgramData", "Microsoft", "Windows", "Templates")
+	if err := os.MkdirAll(deepPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deepPath, "readme.txt"), []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	programData := filepath.Join(ts.RootDir(), jobID, volName, "ProgramData")
+	if err := os.MkdirAll(programData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	junction := filepath.Join(programData, "Templates")
+	absTarget := "/mnt/export/" + jobID + "/" + volName +
+		"/ProgramData/Microsoft/Windows/Templates"
+	if err := os.Symlink(absTarget, junction); err != nil {
+		t.Skipf("symlink unsupported in test env: %v", err)
+	}
+	junctionInSFTP := "/" + jobID + "/" + volName + "/ProgramData/Templates"
+	ts.WithBrokenOpenDir(junctionInSFTP)
+
+	c, err := NewClient(ClientConfig{
+		Username: "root", Signer: ts.Signer(), ConnectTimeout: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := c.Dial(context.Background(), ts.Addr().String(),
+		"["+ts.Addr().String()+"] "+ts.HostKeyString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	programDataSFTP := "/" + jobID + "/" + volName + "/ProgramData"
+	entries, err := sess.ListDir(programDataSFTP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info os.FileInfo
+	for _, e := range entries {
+		if e.Name() == "Templates" {
+			info = e
+			break
+		}
+	}
+	if info == nil {
+		t.Skip("test server didn't create the Templates junction")
+	}
+	if !info.IsDir() {
+		t.Errorf("Templates junction IsDir()=false; chroot-strip should have promoted it")
+	}
+	wantResolved := "/" + jobID + "/" + volName +
+		"/ProgramData/Microsoft/Windows/Templates"
+	if rp := resolvedPathOf(info); rp != wantResolved {
+		t.Errorf("ResolvedPath()=%q, want %q (deeply-nested chroot-stripped path)", rp, wantResolved)
+	}
+	if sess.chrootDepth != 2 {
+		t.Errorf("sess.chrootDepth = %d, want 2", sess.chrootDepth)
+	}
+}
+
 // resolvedPathOf mirrors handlers.resolvedPathOf so tests can
 // assert on the resolved path without taking a handler-package
 // dependency. Both implementations must stay in sync — if you
